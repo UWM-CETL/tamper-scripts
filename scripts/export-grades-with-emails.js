@@ -23,28 +23,74 @@
 
     function createCustomButton() {
         const btn = document.createElement('button');
-        btn.textContent = 'Export With Emails';
         btn.style.marginLeft = '10px';
-        btn.className = 'css-10xwpqb-view--inlineBlock-baseButton'; // mimic Canvas styling
+        btn.className = 'css-10xwpqb-view--inlineBlock-baseButton';
+
+        // static label + dynamic counter (hidden from AT)
+        const labelSpan    = document.createElement('span');
+        const counterSpan  = document.createElement('span');
+        counterSpan.setAttribute('aria-hidden', 'true');
+        counterSpan.style.marginLeft = '4px';
+
+        labelSpan.textContent   = 'Export With Emails';
+        btn.appendChild(labelSpan);
+        btn.appendChild(counterSpan);
+
+        /* ---- single live region for the whole page ---- */
+        let live = document.getElementById('csv-export-live');
+        if (!live) {
+            live = Object.assign(document.createElement('div'), {
+                id: 'csv-export-live',
+                style: 'position:absolute;left:-9999px;',
+            });
+            live.setAttribute('aria-live', 'polite');
+            document.body.appendChild(live);
+        }
+
+        let busy = false;
+
         btn.onclick = async () => {
-            const proceed = confirm(
-                "⚠️ This export includes student emails and raw scores. It is not re-importable into Canvas.\n\nContinue?"
-            );
-            if (!proceed) return;
+            if (busy) return;
+            if (!confirm("⚠️ This export includes student emails and raw scores. It is *not* re-importable into Canvas.\n\nContinue?")) return;
+
+            busy = true;
+            btn.disabled = true;
+            btn.setAttribute('aria-busy', 'true');
+            labelSpan.textContent = 'Exporting…';
+            counterSpan.textContent = '';
+            live.textContent = 'Generating report…';
+
+            /* callback that updates the counter but stays invisible to AT */
+            const updateProgress = (done, total) => {
+                counterSpan.textContent = `(${done}/${total})`;
+            };
 
             const courseId = window.location.pathname.match(/courses\/(\d+)/)?.[1];
             if (!courseId) {
-                alert("Could not determine course ID from URL.");
+                alert('Could not determine course ID from URL.');
+                reset();
                 return;
             }
 
             try {
-                await exportAllSubmissions(courseId);
+                await exportAllSubmissions(courseId, updateProgress);
+                live.textContent = 'Report ready — download started.';
             } catch (err) {
-                console.error("Export failed:", err);
-                alert("Failed to export submissions. See console for details.");
+                console.error('Export failed:', err);
+                alert('Failed to export submissions. See console for details.');
+                live.textContent = 'Export failed.';
+            } finally {
+                reset();
             }
         };
+
+        function reset() {
+            busy = false;
+            btn.disabled = false;
+            btn.removeAttribute('aria-busy');
+            labelSpan.textContent = 'Export With Emails';
+            counterSpan.textContent = '';
+        }
 
         return btn;
     }
@@ -102,45 +148,76 @@
         return await canvasApiGetAllPages(url);
     }
 
-    async function exportAllSubmissions(courseId) {
-        const assignments = await fetchAssignments(courseId);
-        const assignmentTitles = {};
-        const studentMap = new Map();
+    /**
+     * Fetch all assignments, then every submission (with user objects),
+     * merge the data into a single CSV, and download it.
+     *
+     * @param {number|string} courseId              Canvas course ID
+     * @param {function}      onProgress            Callback (done, total) – optional
+     *                                             Fires once at start, then after each assignment
+     */
+    async function exportAllSubmissions(courseId, onProgress = () => {}) {
+        const assignments = await fetchAssignments(courseId);  
+        const total       = assignments.length;
+        let   done        = 0;
+        onProgress(done, total);
 
-        for (const assignment of assignments) {
-            const submissions = await fetchSubmissionsForAssignment(courseId, assignment.id);
-            assignmentTitles[assignment.id] = assignment.name;
+        const studentMap       = new Map();
+        const assignmentTitles = [];
 
-            for (const sub of submissions) {
-                const user = sub.user || {};
-                const userId = user.id;
-                if (!studentMap.has(userId)) {
-                    studentMap.set(userId, {
-                        name: user.name || `ID ${userId}`,
-                        email: user.email || user.login_id || '',
+        for (const asg of assignments) {
+            assignmentTitles.push(asg.name);
+            const subs = await fetchSubmissionsForAssignment(courseId, asg.id);
+
+            for (const sub of subs) {
+                const u    = sub.user ?? {};
+                const uid  = u.id ?? sub.user_id;
+                if (!studentMap.has(uid)) {
+                    studentMap.set(uid, {
+                        name:  u.name      ?? `ID ${uid}`,
+                        email: u.email     ?? u.login_id ?? '',
                         grades: {}
                     });
                 }
-                const student = studentMap.get(userId);
-                student.grades[assignment.name] = sub.score ?? '';
+                studentMap.get(uid).grades[asg.name] = sub.score ?? '';
             }
+
+            done += 1;
+            onProgress(done, total);
         }
 
-        // Build CSV
-        const sortedAssignments = assignments.map(a => a.name);
-        const headers = ['Student', 'Email', ...sortedAssignments];
-        const rows = [headers];
+        const rows = [
+            ['Student', 'Email', ...assignmentTitles]
+        ];
 
         for (const student of studentMap.values()) {
-            const row = [student.name, student.email];
-            for (const title of sortedAssignments) {
-                row.push(student.grades[title] ?? '');
-            }
-            rows.push(row);
+            rows.push([
+                student.name,
+                student.email,
+                ...assignmentTitles.map(t => student.grades[t] ?? '')
+            ]);
         }
 
-        const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+        const csv = rows
+            .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+            .join('\n');
+
         downloadCsv(csv, 'canvas_assignment_submissions.csv');
+    }
+
+
+    function downloadCsv(csv, filename = 'export.csv') {
+        // Pre-pend UTF-8 BOM so Excel opens UTF-8 correctly
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        const url  = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     waitForExportButton((exportBtn) => {
