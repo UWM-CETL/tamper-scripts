@@ -26,14 +26,28 @@
         btn.textContent = 'Export With Emails';
         btn.style.marginLeft = '10px';
         btn.className = 'css-10xwpqb-view--inlineBlock-baseButton'; // mimic Canvas styling
-        btn.onclick = () => {
+        btn.onclick = async () => {
             const proceed = confirm(
-                "⚠️ Warning: This export includes student emails and may not match the format required for re-import into Canvas.\n\nDo you want to continue?"
+                "⚠️ This export includes student emails and raw scores. It is not re-importable into Canvas.\n\nContinue?"
             );
             if (!proceed) return;
 
-            // TODO: Insert API calls and CSV generation here
+            const courseId = window.location.pathname.match(/courses\/(\d+)/)?.[1];
+            if (!courseId) {
+                alert("Could not determine course ID from URL.");
+                return;
+            }
+
+            try {
+                const submissions = await fetchSubmissions(courseId);
+                const csv = generateCsvFromSubmissions(submissions);
+                downloadCsv(csv);
+            } catch (err) {
+                console.error("Export failed:", err);
+                alert("Failed to export submissions. See console for details.");
+            }
         };
+
         return btn;
     }
 
@@ -79,7 +93,61 @@
 
       return results;
     }
+  
+    async function fetchSubmissions(courseId) {
+        const url = `/api/v1/courses/${courseId}/students/submissions?include[]=user&include[]=assignment`;
+        return await canvasApiGetAllPages(url);
+    }
 
+    function generateCsvFromSubmissions(submissions) {
+        const students = new Map();
+        const assignments = new Map();
+
+        // Organize data
+        for (const sub of submissions) {
+            const user = sub.user || {};
+            const assignment = sub.assignment || {};
+            const userId = user.id;
+
+            if (!students.has(userId)) {
+                students.set(userId, {
+                    name: user.name || `ID ${userId}`,
+                    email: user.email || user.login_id || '',
+                    grades: {}
+                });
+            }
+
+            const student = students.get(userId);
+            const assignmentName = assignment.name || `Assignment ${assignment.id}`;
+            assignments.set(assignment.id, assignmentName);
+            student.grades[assignmentName] = sub.score ?? '';
+        }
+
+        // Build CSV rows
+        const sortedAssignments = Array.from(assignments.values());
+        const headers = ['Student', 'Email', ...sortedAssignments];
+        const rows = [headers];
+
+        for (const student of students.values()) {
+            const row = [student.name, student.email];
+            for (const title of sortedAssignments) {
+                row.push(student.grades[title] ?? '');
+            }
+            rows.push(row);
+        }
+
+        return rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    }
+
+    function downloadCsv(csvContent, filename = 'canvas_submissions_export.csv') {
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 
     waitForExportButton((exportBtn) => {
         const customBtn = createCustomButton();
