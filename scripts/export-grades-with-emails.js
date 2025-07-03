@@ -39,9 +39,7 @@
             }
 
             try {
-                const submissions = await fetchSubmissions(courseId);
-                const csv = generateCsvFromSubmissions(submissions);
-                downloadCsv(csv);
+                await exportAllSubmissions(courseId);
             } catch (err) {
                 console.error("Export failed:", err);
                 alert("Failed to export submissions. See console for details.");
@@ -93,42 +91,47 @@
 
       return results;
     }
-  
-    async function fetchSubmissions(courseId) {
-        const url = `/api/v1/courses/${courseId}/students/submissions?include[]=user&include[]=assignment`;
+
+    async function fetchAssignments(courseId) {
+        const url = `/api/v1/courses/${courseId}/assignments`;
         return await canvasApiGetAllPages(url);
     }
 
-    function generateCsvFromSubmissions(submissions) {
-        const students = new Map();
-        const assignments = new Map();
+    async function fetchSubmissionsForAssignment(courseId, assignmentId) {
+        const url = `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions?include[]=user`;
+        return await canvasApiGetAllPages(url);
+    }
 
-        // Organize data
-        for (const sub of submissions) {
-            const user = sub.user || {};
-            const assignment = sub.assignment || {};
-            const userId = user.id;
+    async function exportAllSubmissions(courseId) {
+        const assignments = await fetchAssignments(courseId);
+        const assignmentTitles = {};
+        const studentMap = new Map();
 
-            if (!students.has(userId)) {
-                students.set(userId, {
-                    name: user.name || `ID ${userId}`,
-                    email: user.email || user.login_id || '',
-                    grades: {}
-                });
+        for (const assignment of assignments) {
+            const submissions = await fetchSubmissionsForAssignment(courseId, assignment.id);
+            assignmentTitles[assignment.id] = assignment.name;
+
+            for (const sub of submissions) {
+                const user = sub.user || {};
+                const userId = user.id;
+                if (!studentMap.has(userId)) {
+                    studentMap.set(userId, {
+                        name: user.name || `ID ${userId}`,
+                        email: user.email || user.login_id || '',
+                        grades: {}
+                    });
+                }
+                const student = studentMap.get(userId);
+                student.grades[assignment.name] = sub.score ?? '';
             }
-
-            const student = students.get(userId);
-            const assignmentName = assignment.name || `Assignment ${assignment.id}`;
-            assignments.set(assignment.id, assignmentName);
-            student.grades[assignmentName] = sub.score ?? '';
         }
 
-        // Build CSV rows
-        const sortedAssignments = Array.from(assignments.values());
+        // Build CSV
+        const sortedAssignments = assignments.map(a => a.name);
         const headers = ['Student', 'Email', ...sortedAssignments];
         const rows = [headers];
 
-        for (const student of students.values()) {
+        for (const student of studentMap.values()) {
             const row = [student.name, student.email];
             for (const title of sortedAssignments) {
                 row.push(student.grades[title] ?? '');
@@ -136,17 +139,8 @@
             rows.push(row);
         }
 
-        return rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
-    }
-
-    function downloadCsv(csvContent, filename = 'canvas_submissions_export.csv') {
-        const blob = new Blob([csvContent], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
+        const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+        downloadCsv(csv, 'canvas_assignment_submissions.csv');
     }
 
     waitForExportButton((exportBtn) => {
