@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Canvas - Export Grades With Email
+// @name         Canvas – Export Grades With Email
 // @namespace    http://tampermonkey.net/
-// @version      0.1
-// @description  Adds a custom export button to Canvas gradebook for enhanced data export
+// @version      0.2
+// @description  Adds an “Export With Emails” button to Canvas gradebook that downloads Student, Login ID, Email and all assignment scores in one CSV
 // @author       Catarino David Delgado
 // @match        https://*.instructure.com/courses/*/gradebook
 // @grant        none
@@ -11,12 +11,14 @@
 (function () {
     'use strict';
 
-    function waitForExportButton(callback) {
-        const interval = setInterval(() => {
-            const exportBtn = document.querySelector('[data-position="export_btn"]');
-            if (exportBtn) {
-                clearInterval(interval);
-                callback(exportBtn);
+    /* ------------------- UI helpers ------------------- */
+
+    function waitForExportButton(cb) {
+        const iv = setInterval(() => {
+            const btn = document.querySelector('[data-position="export_btn"]');
+            if (btn) {
+                clearInterval(iv);
+                cb(btn);
             }
         }, 500);
     }
@@ -26,17 +28,16 @@
         btn.style.marginLeft = '10px';
         btn.className = 'css-10xwpqb-view--inlineBlock-baseButton';
 
-        // static label + dynamic counter (hidden from AT)
-        const labelSpan    = document.createElement('span');
-        const counterSpan  = document.createElement('span');
-        counterSpan.setAttribute('aria-hidden', 'true');
-        counterSpan.style.marginLeft = '4px';
+        const label = document.createElement('span');
+        const counter = document.createElement('span');
+        counter.setAttribute('aria-hidden', 'true');
+        counter.style.marginLeft = '4px';
 
-        labelSpan.textContent   = 'Export With Emails';
-        btn.appendChild(labelSpan);
-        btn.appendChild(counterSpan);
+        label.textContent = 'Export With Emails';
+        btn.appendChild(label);
+        btn.appendChild(counter);
 
-        /* ---- single live region for the whole page ---- */
+        /* live-region (one per page) */
         let live = document.getElementById('csv-export-live');
         if (!live) {
             live = Object.assign(document.createElement('div'), {
@@ -51,19 +52,22 @@
 
         btn.onclick = async () => {
             if (busy) return;
-            if (!confirm("⚠️ This export includes student emails and raw scores. It is *not* re-importable into Canvas.\n\nContinue?")) return;
+            if (
+                !confirm(
+                    '⚠️  This export includes student emails and raw scores.\n' +
+                    'It is *not* re-importable into Canvas.\n\nContinue?'
+                )
+            )
+                return;
 
             busy = true;
             btn.disabled = true;
             btn.setAttribute('aria-busy', 'true');
-            labelSpan.textContent = 'Exporting…';
-            counterSpan.textContent = '';
+            label.textContent = 'Exporting…';
+            counter.textContent = '';
             live.textContent = 'Generating report…';
 
-            /* callback that updates the counter but stays invisible to AT */
-            const updateProgress = (done, total) => {
-                counterSpan.textContent = `(${done}/${total})`;
-            };
+            const update = (d, t) => (counter.textContent = `(${d}/${t})`);
 
             const courseId = window.location.pathname.match(/courses\/(\d+)/)?.[1];
             if (!courseId) {
@@ -73,144 +77,141 @@
             }
 
             try {
-                await exportAllSubmissions(courseId, updateProgress);
+                await exportAllSubmissions(courseId, update);
                 live.textContent = 'Report ready — download started.';
-            } catch (err) {
-                console.error('Export failed:', err);
+            } catch (e) {
+                console.error('Export failed:', e);
                 alert('Failed to export submissions. See console for details.');
                 live.textContent = 'Export failed.';
             } finally {
                 reset();
             }
-        };
 
-        function reset() {
-            busy = false;
-            btn.disabled = false;
-            btn.removeAttribute('aria-busy');
-            labelSpan.textContent = 'Export With Emails';
-            counterSpan.textContent = '';
-        }
+            function reset() {
+                busy = false;
+                btn.disabled = false;
+                btn.removeAttribute('aria-busy');
+                label.textContent = 'Export With Emails';
+                counter.textContent = '';
+            }
+        };
 
         return btn;
     }
 
-    async function canvasApiGetAllPages(initialUrl) {
-      const results = [];
-      let nextUrl = initialUrl;
-      let lastUrl = null;
+    /* ------------------- Canvas API helpers ------------------- */
 
-      while (nextUrl && nextUrl !== lastUrl) {
-          const response = await fetch(nextUrl, {
-              method: 'GET',
-              credentials: 'include',
-              headers: {
-                  'Accept': 'application/json'
-              }
-          });
+    async function canvasApiGetAllPages(firstUrl) {
+        const out = [];
+        let next = firstUrl;
+        let prev = null;
 
-          if (!response.ok) {
-              throw new Error(`Canvas API request failed: ${response.status}`);
-          }
+        while (next && next !== prev) {
+            const res = await fetch(next, {
+                credentials: 'include',
+                headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) throw new Error(`Canvas API error: ${res.status}`);
 
-          const data = await response.json();
-          results.push(...data);
+            const data = await res.json();
+            out.push(...data);
 
-          // Prepare for next iteration
-          lastUrl = nextUrl;
-          nextUrl = null;
+            prev = next;
+            next = null;
+            const link = res.headers.get('Link');
+            if (link) {
+                for (const segment of link.split(',')) {
+                    const [urlPart, relPart] = segment.split(';');
+                    if (relPart?.includes('rel="next"')) {
+                        next = urlPart.trim().slice(1, -1); // remove <>
+                    }
+                }
+            }
+        }
+        return out;
+    }
 
-          const linkHeader = response.headers.get('Link');
-          if (linkHeader) {
-              const links = linkHeader.split(',').map(part => part.trim());
-              for (const link of links) {
-                  const [urlPart, relPart] = link.split(';');
-                  if (relPart && relPart.includes('rel="next"')) {
-                      const match = urlPart.match(/<(.+)>/);
-                      if (match && match[1] !== lastUrl) {
-                          nextUrl = match[1];
-                      }
-                  }
-              }
-          }
-      }
+    /* --------  data-gathering helpers  -------- */
 
-      return results;
+    async function fetchCourseUsers(courseId) {
+        const url = `/api/v1/courses/${courseId}/users?include[]=email&per_page=100`;
+        return await canvasApiGetAllPages(url);
+    }
+
+    async function buildUserDirectory(courseId) {
+        const users = await fetchCourseUsers(courseId);
+        const map = new Map();
+        for (const u of users) {
+            map.set(u.id, {
+                name: u.name ?? `ID ${u.id}`,
+                loginId: u.login_id ?? u.sis_user_id ?? '',
+                email: u.email ?? '',
+                grades: {},
+            });
+        }
+        return map;
     }
 
     async function fetchAssignments(courseId) {
-        const url = `/api/v1/courses/${courseId}/assignments`;
+        const url = `/api/v1/courses/${courseId}/assignments?per_page=100`;
         return await canvasApiGetAllPages(url);
     }
 
-    async function fetchSubmissionsForAssignment(courseId, assignmentId) {
-        const url = `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions?include[]=user`;
+    async function fetchSubmissionsForAssignment(courseId, asgId) {
+        const url = `/api/v1/courses/${courseId}/assignments/${asgId}/submissions?include[]=user&per_page=100`;
         return await canvasApiGetAllPages(url);
     }
 
-    /**
-     * Fetch all assignments, then every submission (with user objects),
-     * merge the data into a single CSV, and download it.
-     *
-     * @param {number|string} courseId              Canvas course ID
-     * @param {function}      onProgress            Callback (done, total) – optional
-     *                                             Fires once at start, then after each assignment
-     */
-    async function exportAllSubmissions(courseId, onProgress = () => {}) {
-        const assignments = await fetchAssignments(courseId);  
-        const total       = assignments.length;
-        let   done        = 0;
+    /* --------------  main export routine -------------- */
+
+    async function exportAllSubmissions(courseId, onProgress = () => { }) {
+        const studentMap = await buildUserDirectory(courseId);
+
+        const assignments = await fetchAssignments(courseId);
+        const total = assignments.length;
+        let done = 0;
         onProgress(done, total);
 
-        const studentMap       = new Map();
-        const assignmentTitles = [];
+        const titles = [];
 
         for (const asg of assignments) {
-            assignmentTitles.push(asg.name);
+            titles.push(asg.name);
             const subs = await fetchSubmissionsForAssignment(courseId, asg.id);
 
             for (const sub of subs) {
-                const u    = sub.user ?? {};
-                const uid  = u.id ?? sub.user_id;
-                if (!studentMap.has(uid)) {
-                    studentMap.set(uid, {
-                        name:  u.name      ?? `ID ${uid}`,
-                        email: u.email     ?? u.login_id ?? '',
-                        grades: {}
-                    });
-                }
+                const uid = sub.user_id ?? sub.user?.id;
+                if (!studentMap.has(uid)) continue; // withdrawn students, etc.
                 studentMap.get(uid).grades[asg.name] = sub.score ?? '';
             }
 
-            done += 1;
-            onProgress(done, total);
+            onProgress(++done, total);
         }
 
-        const rows = [
-            ['Student', 'Email', ...assignmentTitles]
-        ];
+        const rows = [['Student', 'Login ID', 'Email', ...titles]];
 
-        for (const student of studentMap.values()) {
+        for (const s of studentMap.values()) {
             rows.push([
-                student.name,
-                student.email,
-                ...assignmentTitles.map(t => student.grades[t] ?? '')
+                s.name,
+                s.loginId,
+                s.email,
+                ...titles.map((t) => s.grades[t] ?? ''),
             ]);
         }
 
         const csv = rows
-            .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+            .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
             .join('\n');
 
         downloadCsv(csv, 'canvas_assignment_submissions.csv');
     }
 
+    /* ------------------- download helper ------------------- */
 
-    function downloadCsv(csv, filename = 'export.csv') {
-        // Pre-pend UTF-8 BOM so Excel opens UTF-8 correctly
-        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-        const url  = URL.createObjectURL(blob);
-
+    function downloadCsv(text, filename = 'export.csv') {
+        const blob = new Blob(['\uFEFF' + text], {
+            type: 'text/csv;charset=utf-8;',
+        });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
@@ -220,9 +221,9 @@
         URL.revokeObjectURL(url);
     }
 
-    waitForExportButton((exportBtn) => {
-        const customBtn = createCustomButton();
-        exportBtn.parentElement.appendChild(customBtn);
-    });
+    /* ------------------- boot ------------------- */
 
+    waitForExportButton((nativeExportBtn) => {
+        nativeExportBtn.parentElement.appendChild(createCustomButton());
+    });
 })();
