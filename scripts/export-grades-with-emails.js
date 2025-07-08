@@ -11,8 +11,10 @@
 (function () {
     'use strict';
 
-    /* ------------------- UI helpers ------------------- */
-
+    /**
+     * Waits for the native Canvas export button to appear, then calls the callback with the button element.
+     * @param {function(HTMLElement):void} cb - Callback to execute when the export button is found.
+     */
     function waitForExportButton(cb) {
         const iv = setInterval(() => {
             const btn = document.querySelector('[data-position="export_btn"]');
@@ -23,6 +25,10 @@
         }, 500);
     }
 
+    /**
+     * Creates the custom "Export With Emails" button and sets up its event handlers.
+     * @returns {HTMLButtonElement} The custom export button element.
+     */
     function createCustomButton() {
         const btn = document.createElement('button');
         btn.style.marginLeft = '10px';
@@ -99,8 +105,11 @@
         return btn;
     }
 
-    /* ------------------- Canvas API helpers ------------------- */
-
+    /**
+     * Fetches all paginated results from a Canvas API endpoint.
+     * @param {string} firstUrl - The initial API endpoint URL.
+     * @returns {Promise<Array>} Resolves to an array of all results from all pages.
+     */
     async function canvasApiGetAllPages(firstUrl) {
         const out = [];
         let next = firstUrl;
@@ -131,8 +140,11 @@
         return out;
     }
 
-    /* --------  data-gathering helpers  -------- */
-
+    /**
+     * Fetches all student users for a course, including their emails and enrollments.
+     * @param {number|string} courseId - Canvas course ID.
+     * @returns {Promise<Array>} Resolves to an array of user objects.
+     */
     async function fetchCourseUsers(courseId) {
         const url =
             `/api/v1/courses/${courseId}/users` +
@@ -144,6 +156,11 @@
         return await canvasApiGetAllPages(url);
     }
 
+    /**
+     * Builds a directory (Map) of student user data for the course.
+     * @param {number|string} courseId - Canvas course ID.
+     * @returns {Promise<Map<number, {name: string, loginId: string, email: string, letter: string, grades: Object}>>} Map of user ID to user info.
+     */
     async function buildUserDirectory(courseId) {
         const users = await fetchCourseUsers(courseId);
         const map = new Map();
@@ -168,29 +185,36 @@
     }
 
 
+    /**
+     * Fetches all assignments for a course.
+     * @param {number|string} courseId - Canvas course ID.
+     * @returns {Promise<Array>} Resolves to an array of assignment objects.
+     */
     async function fetchAssignments(courseId) {
         const url = `/api/v1/courses/${courseId}/assignments?per_page=100`;
         return await canvasApiGetAllPages(url);
     }
 
+    /**
+     * Fetches all submissions for a given assignment in a course.
+     * @param {number|string} courseId - Canvas course ID.
+     * @param {number|string} asgId - Assignment ID.
+     * @returns {Promise<Array>} Resolves to an array of submission objects.
+     */
     async function fetchSubmissionsForAssignment(courseId, asgId) {
         const url = `/api/v1/courses/${courseId}/assignments/${asgId}/submissions?include[]=user&per_page=100`;
         return await canvasApiGetAllPages(url);
     }
 
-    /* --------------  main export routine -------------- */
-
     /**
-    * Gather every assignment and its submissions, merge them with the
-    * user directory, and download a CSV.  Columns in order:
-    *
-    *   Student | Login ID | Email | <one column per assignment> | Final Grade
-    *
-    * Only students who have at least one graded submission are included.
-    *
-    * @param {number|string} courseId   Canvas course ID
-    * @param {function}      onProgress Callback (done, total) – optional
-    */
+     * Gathers every assignment and its submissions, merges them with the user directory, and downloads a CSV.
+     * Columns in order: Student | Login ID | Email | <one column per assignment> | Final Grade
+     * Only students who have at least one graded submission are included.
+     *
+     * @param {number|string} courseId - Canvas course ID.
+     * @param {function(number, number):void} [onProgress] - Optional callback for progress updates (done, total).
+     * @returns {Promise<void>} Resolves when the CSV has been downloaded.
+     */
     async function exportAllSubmissions(courseId, onProgress = () => { }) {
         /* 1) Build a user directory once (login-ID, email, letter grade) */
         const studentMap = await buildUserDirectory(courseId);
@@ -242,9 +266,11 @@
         downloadCsv(csv, 'canvas_assignment_submissions.csv');
     }
 
-
-    /* ------------------- download helper ------------------- */
-
+    /**
+     * Downloads a CSV file with the given text content and filename.
+     * @param {string} text - The CSV content.
+     * @param {string} [filename='export.csv'] - The filename for the downloaded file.
+     */
     function downloadCsv(text, filename = 'export.csv') {
         const blob = new Blob(['\uFEFF' + text], {
             type: 'text/csv;charset=utf-8;',
