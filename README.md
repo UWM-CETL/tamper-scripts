@@ -23,5 +23,7 @@ Snippets should work with other tools like Greasemonkey 4, Tampermonkey, and oth
    * Hit **Raw** – your manager will pop up “Install?”
 3. **Click “Confirm”** → refresh Canvas → new button / feature appears.
 
+## Scripts
+* [Export Grades With Emails](https://github.com/UWM-CETL/tamper-scripts/blob/main/scripts/README-export-grades-with-emails.md)
 ## For Support
 [Contact CETL](https://uwm.edu/cetl/about/contact/)
