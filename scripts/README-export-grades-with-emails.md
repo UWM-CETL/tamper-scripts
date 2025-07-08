@@ -1,5 +1,5 @@
 
-# `Canvas-Export-Grades-With-Email.user.js` – README
+# README for Canvas-Export-Grades-With-Email.user.js
 
 ## What it does
 Adds an **“Export With Emails”** button to every Canvas Gradebook page.
