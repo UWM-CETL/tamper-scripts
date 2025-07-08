@@ -285,8 +285,6 @@
         URL.revokeObjectURL(url);
     }
 
-    /* ------------------- boot ------------------- */
-
     waitForExportButton((nativeExportBtn) => {
         nativeExportBtn.parentElement.appendChild(createCustomButton());
     });
