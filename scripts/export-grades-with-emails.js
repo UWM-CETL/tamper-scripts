@@ -134,23 +134,39 @@
     /* --------  data-gathering helpers  -------- */
 
     async function fetchCourseUsers(courseId) {
-        const url = `/api/v1/courses/${courseId}/users?include[]=email&per_page=100`;
+        const url =
+            `/api/v1/courses/${courseId}/users` +
+            '?include[]=email' +
+            '&include[]=enrollments' +        // ← NEW
+            '&enrollment_type[]=student' +    // (limits to students only)
+            '&per_page=100';
+
         return await canvasApiGetAllPages(url);
     }
 
     async function buildUserDirectory(courseId) {
         const users = await fetchCourseUsers(courseId);
         const map = new Map();
+
         for (const u of users) {
+            /* pick the student enrollment (there is only one for normal students) */
+            let letter = '';
+            if (u.enrollments && u.enrollments.length) {
+                const e = u.enrollments.find(en => en.type === 'StudentEnrollment');
+                letter = e?.grades?.final_grade ?? e?.grades?.current_grade ?? '';
+            }
+
             map.set(u.id, {
                 name: u.name ?? `ID ${u.id}`,
                 loginId: u.login_id ?? u.sis_user_id ?? '',
                 email: u.email ?? '',
-                grades: {},
+                letter: letter,          // ← NEW
+                grades: {}               // will hold per-assignment scores
             });
         }
         return map;
     }
+
 
     async function fetchAssignments(courseId) {
         const url = `/api/v1/courses/${courseId}/assignments?per_page=100`;
@@ -166,16 +182,17 @@
 
     /**
     * Gather every assignment and its submissions, merge them with the
-    * user directory, and download a CSV that contains only students
-    * who have at least one graded submission.
+    * user directory, and download a CSV.  Columns in order:
     *
-    * Columns: Student | Login ID | Email | <one per assignment>
+    *   Student | Login ID | Email | <one column per assignment> | Final Grade
+    *
+    * Only students who have at least one graded submission are included.
     *
     * @param {number|string} courseId   Canvas course ID
     * @param {function}      onProgress Callback (done, total) – optional
     */
     async function exportAllSubmissions(courseId, onProgress = () => { }) {
-        /* 1) Build a user directory once (login-ID + email) */
+        /* 1) Build a user directory once (login-ID, email, letter grade) */
         const studentMap = await buildUserDirectory(courseId);
 
         /* 2) Get every assignment, then every submission */
@@ -200,7 +217,7 @@
         }
 
         /* 3) Build CSV rows — skip users with no grades at all */
-        const rows = [['Student', 'Login ID', 'Email', ...titles]];
+        const rows = [['Student', 'Login ID', 'Email', ...titles, 'Final Grade']];
 
         for (const s of studentMap.values()) {
             const hasGrade = Object.values(s.grades).some(
@@ -212,7 +229,8 @@
                 s.name,
                 s.loginId,
                 s.email,
-                ...titles.map(t => s.grades[t] ?? '')
+                ...titles.map(t => s.grades[t] ?? ''),
+                s.letter                                    // ← now last column
             ]);
         }
 
