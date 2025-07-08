@@ -164,9 +164,21 @@
 
     /* --------------  main export routine -------------- */
 
+    /**
+    * Gather every assignment and its submissions, merge them with the
+    * user directory, and download a CSV that contains only students
+    * who have at least one graded submission.
+    *
+    * Columns: Student | Login ID | Email | <one per assignment>
+    *
+    * @param {number|string} courseId   Canvas course ID
+    * @param {function}      onProgress Callback (done, total) – optional
+    */
     async function exportAllSubmissions(courseId, onProgress = () => { }) {
+        /* 1) Build a user directory once (login-ID + email) */
         const studentMap = await buildUserDirectory(courseId);
 
+        /* 2) Get every assignment, then every submission */
         const assignments = await fetchAssignments(courseId);
         const total = assignments.length;
         let done = 0;
@@ -176,34 +188,42 @@
 
         for (const asg of assignments) {
             titles.push(asg.name);
-            const subs = await fetchSubmissionsForAssignment(courseId, asg.id);
 
+            const subs = await fetchSubmissionsForAssignment(courseId, asg.id);
             for (const sub of subs) {
                 const uid = sub.user_id ?? sub.user?.id;
-                if (!studentMap.has(uid)) continue; // withdrawn students, etc.
+                if (!studentMap.has(uid)) continue;           // withdrawn / test users
                 studentMap.get(uid).grades[asg.name] = sub.score ?? '';
             }
 
             onProgress(++done, total);
         }
 
+        /* 3) Build CSV rows — skip users with no grades at all */
         const rows = [['Student', 'Login ID', 'Email', ...titles]];
 
         for (const s of studentMap.values()) {
+            const hasGrade = Object.values(s.grades).some(
+                v => v !== '' && v != null
+            );
+            if (!hasGrade) continue;                        // observers / teachers
+
             rows.push([
                 s.name,
                 s.loginId,
                 s.email,
-                ...titles.map((t) => s.grades[t] ?? ''),
+                ...titles.map(t => s.grades[t] ?? '')
             ]);
         }
 
+        /* 4) Stringify and download */
         const csv = rows
-            .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+            .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
             .join('\n');
 
         downloadCsv(csv, 'canvas_assignment_submissions.csv');
     }
+
 
     /* ------------------- download helper ------------------- */
 
