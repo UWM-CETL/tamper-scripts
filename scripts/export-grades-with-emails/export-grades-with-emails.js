@@ -132,7 +132,7 @@
                 for (const segment of link.split(',')) {
                     const [urlPart, relPart] = segment.split(';');
                     if (relPart?.includes('rel="next"')) {
-                        next = urlPart.trim().slice(1, -1); // remove <>
+                        next = urlPart.trim().slice(1, -1);
                     }
                 }
             }
@@ -149,8 +149,8 @@
         const url =
             `/api/v1/courses/${courseId}/users` +
             '?include[]=email' +
-            '&include[]=enrollments' +        // ← NEW
-            '&enrollment_type[]=student' +    // (limits to students only)
+            '&include[]=enrollments' +
+            '&enrollment_type[]=student' +
             '&per_page=100';
 
         return await canvasApiGetAllPages(url);
@@ -177,8 +177,8 @@
                 name: u.name ?? `ID ${u.id}`,
                 loginId: u.login_id ?? u.sis_user_id ?? '',
                 email: u.email ?? '',
-                letter: letter,          // ← NEW
-                grades: {}               // will hold per-assignment scores
+                letter: letter,
+                grades: {}
             });
         }
         return map;
@@ -233,7 +233,7 @@
             const subs = await fetchSubmissionsForAssignment(courseId, asg.id);
             for (const sub of subs) {
                 const uid = sub.user_id ?? sub.user?.id;
-                if (!studentMap.has(uid)) continue;           // withdrawn / test users
+                if (!studentMap.has(uid)) continue;
                 studentMap.get(uid).grades[asg.name] = sub.score ?? '';
             }
 
@@ -247,14 +247,14 @@
             const hasGrade = Object.values(s.grades).some(
                 v => v !== '' && v != null
             );
-            if (!hasGrade) continue;                        // observers / teachers
+            if (!hasGrade) continue;
 
             rows.push([
                 s.name,
                 s.loginId,
                 s.email,
                 ...titles.map(t => s.grades[t] ?? ''),
-                s.letter                                    // ← now last column
+                s.letter
             ]);
         }
 
