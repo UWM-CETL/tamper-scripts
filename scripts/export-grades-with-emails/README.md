@@ -2,7 +2,7 @@
 # README for Canvas-Export-Grades-With-Email.user.js
 
 ## What it does
-Adds an **“Export With Emails”** button to every Canvas Gradebook page.
+Adds an **“Export With Emails”** link to every Canvas Gradebook page.
 Click once → download a CSV containing:
 
 ```
@@ -11,15 +11,8 @@ Student | Login ID (SIS) | Email | <each assignment score> | Final Grade
 
 Only students who have at least one graded submission are included.
 
-## Works with
-
-Tampermonkey · **Violentmonkey** (recommended) · Greasemonkey 4+
-
-## Quick install
-1. Install a userscript manager (e.g. Violentmonkey from the Chrome / Firefox store).
-2. Open the raw script URL and accept the “Install” prompt:
-   `https://raw.githubusercontent.com/UWM-CETL/tamper-scripts/main/scripts/Canvas-Export-Grades-With-Email.user.js`
-3. Refresh any Canvas gradebook. The new button appears next to Canvas’s own **Export** menu.
+## Installation
+[Install this script]()
 
 ## Using it
 * Visit your courses Gradebook.

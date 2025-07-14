@@ -9,21 +9,27 @@ Tiny bits of JavaScript that run **in your browser** and make Canvas and other a
 * **Open source** – every line is visible; nothing is phoning home.
 
 ## Requirements
-**Violentmonkey** - ✨ Recommended – no ads, open-source MIT license.
+To use these scripts, install a userscript runner extension in your browser. Popular scriptrunners include:
 
-Snippets should work with other tools like Greasemonkey 4, Tampermonkey, and others.
+* [Greasemonkey for Firefox](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/)
+* [Tampermonkey for Chrome, Edge, Firefox, Others (Preferred)](https://www.tampermonkey.net/)
+
+Snippets should work with other userscript runners as long as they provide the same API.
 
 ## Quick-start (60 seconds)
-1. **Install Violentmonkey**  
-   * [Chrome / Edge](https://chromewebstore.google.com/detail/violentmonkey)
-   * [Firefox](https://addons.mozilla.org/firefox/addon/violentmonkey/)
+1. **Install Tampermonkey**  
+   * [Install from the Tampermonkey website](https://www.tampermonkey.net/)
+   * [View official instructions](https://www.tampermonkey.net/faq.php#Q100)
+   * For Tampermonkey to work fully, some permissions need to be granted [Learn how to enable browser permissions](https://www.tampermonkey.net/faq.php#Q209).
 2. **Grab a script**  
-   * Navigate to the `scripts` folder in this repo.  
-   * Click the file you want (e.g. **Canvas-Export-Grades-With-Email.user.js**).  
-   * Hit **Raw** – your manager will pop up “Install?”
-3. **Click “Confirm”** → refresh Canvas → new button / feature appears.
+   * Navigate to the `scripts` folder in this repository.  
+   * Navigate to the folder containing the script you wish to use.
+   * Review the README for special information.
+   * Copy the link provided in the README for the script.
+3. Click the "Install" link on the README page for th script.
 
 ## Scripts
-* [Export Grades With Emails](https://github.com/UWM-CETL/tamper-scripts/blob/main/scripts/README-export-grades-with-emails.md)
+* [Export Grades With Emails](scripts/export-grades-with-emails/README.md)
+
 ## For Support
 [Contact CETL](https://uwm.edu/cetl/about/contact/)
