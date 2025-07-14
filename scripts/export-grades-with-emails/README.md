@@ -12,7 +12,7 @@ Student | Login ID (SIS) | Email | <each assignment score> | Final Grade
 Only students who have at least one graded submission are included.
 
 ## Installation
-[Install this script]()
+[Install this script](https://uwm-cetl.github.io/tamper-scripts/scripts/export-grades-with-emails/export-grades-with-emails.user.js)
 
 ## Using it
 * Visit your courses Gradebook.
