@@ -4,7 +4,7 @@
 // @version      0.2
 // @description  Adds an “Export With Emails” button to Canvas gradebook that downloads Student, Login ID, Email and all assignment scores in one CSV
 // @author       Catarino David Delgado
-// @match        https://*.instructure.com/courses/*/gradebook
+// @match        https://*.instructure.com/courses/*/gradebook?*
 // @grant        none
 // ==/UserScript==
 
@@ -286,6 +286,6 @@
     }
 
     waitForExportButton((nativeExportBtn) => {
-        nativeExportBtn.parentElement.appendChild(createCustomButton());
+        nativeExportBtn.parentElement.parentElement.appendChild(createCustomButton());
     });
 })();
