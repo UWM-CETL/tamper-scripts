@@ -1,4 +1,4 @@
-# README for Canvas-Export-Grades-With-Email.user.js
+# README for Canvas-Export-Grades-With-Quiz-Completion.user.js
 
 ## What it does
 
