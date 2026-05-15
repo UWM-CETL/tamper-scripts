@@ -286,6 +286,6 @@
     }
 
     waitForExportButton((nativeExportBtn) => {
-        nativeExportBtn.parentElement.appendChild(createCustomButton());
+        nativeExportBtn.parentElement.parentElement.appendChild(createCustomButton());
     });
 })();
