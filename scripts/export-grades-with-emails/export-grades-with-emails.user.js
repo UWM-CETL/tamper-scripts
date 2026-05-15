@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas – Export Grades With Email
 // @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.3
 // @description  Adds an “Export With Emails” button to Canvas gradebook that downloads Student, Login ID, Email and all assignment scores in one CSV
 // @author       Catarino David Delgado
 // @match        https://*.instructure.com/courses/*/gradebook?*
@@ -286,6 +286,6 @@
     }
 
     waitForExportButton((nativeExportBtn) => {
-        nativeExportBtn.parentElement.parentElement.appendChild(createCustomButton());
+        nativeExportBtn.parentElement.appendChild(createCustomButton());
     });
 })();
