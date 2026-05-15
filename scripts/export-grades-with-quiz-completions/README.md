@@ -30,7 +30,7 @@ If Canvas does not provide a submission or completion timestamp for a student’
 
 ## Installation
 
-[Install this script](https://uwm-cetl.github.io/tamper-scripts/scripts/export-grades-with-quiz-completion/export-grades-with-quiz-completion.user.js)
+[Install this script](https://uwm-cetl.github.io/tamper-scripts/scripts/export-grades-with-quiz-completions/export-grades-with-quiz-completion.user.js)
 
 ## Using it
 
