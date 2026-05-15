@@ -30,6 +30,7 @@ Snippets should work with other userscript runners as long as they provide the s
 
 ## Scripts
 * [Export Grades With Emails](scripts/export-grades-with-emails/README.md)
+* [Export Grades With Quiz Completion](scripts/export-grades-with-quiz-completions/README.md)
 
 ## For Support
-[Contact CETL](https://uwm.edu/cetl/about/contact/)
+[Contact CASL](https://uwm.edu/advancing-learning/about/contact/)
