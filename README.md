@@ -32,6 +32,7 @@ Snippets should work with other userscript runners as long as they provide the s
 * [Export Grades With Emails](scripts/export-grades-with-emails/README.md)
 * [Export Grades With Assignment Completion](scripts/export-grades-with-quiz-completions/README.md)
 * [Admin: Add Student to Course](scripts/admin-add-student-to-course/README.md)
+* [Admin: Remove Subaccount Roles](scripts/admin-remove-subaccount-roles/README.md)
 
 ## For Support
 [Contact CASL](https://uwm.edu/advancing-learning/about/contact/)
