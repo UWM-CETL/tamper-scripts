@@ -26,11 +26,12 @@ Snippets should work with other userscript runners as long as they provide the s
    * Navigate to the folder containing the script you wish to use.
    * Review the README for special information.
    * Copy the link provided in the README for the script.
-3. Click the "Install" link on the README page for th script.
+3. Click the "Install" link on the README page for the script.
 
 ## Scripts
 * [Export Grades With Emails](scripts/export-grades-with-emails/README.md)
-* [Export Grades With Quiz Completion](scripts/export-grades-with-quiz-completions/README.md)
+* [Export Grades With Assignment Completion](scripts/export-grades-with-quiz-completions/README.md)
+* [Admin: Add Student to Course](scripts/admin-add-student-to-course/README.md)
 
 ## For Support
 [Contact CASL](https://uwm.edu/advancing-learning/about/contact/)
