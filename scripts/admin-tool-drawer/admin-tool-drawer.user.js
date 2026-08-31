@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.11.1
+// @version      0.12.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -622,6 +622,88 @@
     return null;
   }
 
+  async function extractZipEntryText(arrayBuffer, expectedFileName) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const minimumEocdOffset = Math.max(0, bytes.length - 65557);
+    let eocdOffset = -1;
+
+    for (let offset = bytes.length - 22; offset >= minimumEocdOffset; offset--) {
+      if (view.getUint32(offset, true) === 0x06054b50) {
+        eocdOffset = offset;
+        break;
+      }
+    }
+    if (eocdOffset < 0) throw new Error('Canvas report ZIP directory was not found.');
+
+    const entryCount = view.getUint16(eocdOffset + 10, true);
+    let directoryOffset = view.getUint32(eocdOffset + 16, true);
+    const decoder = new TextDecoder();
+
+    for (let index = 0; index < entryCount; index++) {
+      if (view.getUint32(directoryOffset, true) !== 0x02014b50) {
+        throw new Error('Canvas report ZIP directory is invalid.');
+      }
+
+      const compressionMethod = view.getUint16(directoryOffset + 10, true);
+      const compressedSize = view.getUint32(directoryOffset + 20, true);
+      const fileNameLength = view.getUint16(directoryOffset + 28, true);
+      const extraLength = view.getUint16(directoryOffset + 30, true);
+      const commentLength = view.getUint16(directoryOffset + 32, true);
+      const localHeaderOffset = view.getUint32(directoryOffset + 42, true);
+      const fileName = decoder.decode(
+        bytes.slice(directoryOffset + 46, directoryOffset + 46 + fileNameLength)
+      );
+
+      if (fileName.split('/').pop()?.toLowerCase() === expectedFileName.toLowerCase()) {
+        if (view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
+          throw new Error(`Canvas report ZIP entry is invalid: ${fileName}`);
+        }
+        const localNameLength = view.getUint16(localHeaderOffset + 26, true);
+        const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+        const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+        const compressed = bytes.slice(dataOffset, dataOffset + compressedSize);
+
+        if (compressionMethod === 0) return decoder.decode(compressed);
+        if (compressionMethod !== 8 || typeof DecompressionStream !== 'function') {
+          throw new Error(`Unsupported Canvas report ZIP compression method: ${compressionMethod}`);
+        }
+
+        const stream = new Blob([compressed])
+          .stream()
+          .pipeThrough(new DecompressionStream('deflate-raw'));
+        return decoder.decode(await new Response(stream).arrayBuffer());
+      }
+
+      directoryOffset += 46 + fileNameLength + extraLength + commentLength;
+    }
+
+    throw new Error(`${expectedFileName} was not included in the Canvas report.`);
+  }
+
+  async function canvasReportCsv(report, fileName) {
+    const attachmentUrl = report?.attachment?.url;
+    if (!attachmentUrl) throw new Error('Canvas completed the report without a download URL.');
+
+    const url = new URL(attachmentUrl, window.location.origin);
+    if (url.origin !== window.location.origin) {
+      throw new Error('Canvas returned an unexpected report download origin.');
+    }
+
+    const response = await window.fetch(url.href, { credentials: 'same-origin' });
+    if (!response.ok) {
+      throw new Error(`Canvas report download failed with HTTP ${response.status}.`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength < 4) {
+      throw new Error('Canvas returned an empty or invalid report download.');
+    }
+    const signature = new DataView(arrayBuffer).getUint32(0, true);
+    return signature === 0x04034b50
+      ? extractZipEntryText(arrayBuffer, fileName)
+      : new TextDecoder().decode(arrayBuffer);
+  }
+
   const NAVIGATION_LINK_COLUMNS = [
     'run.generated_at',
     'scope.account_id',
@@ -657,15 +739,13 @@
     'run.generated_at',
     'scope.account_id',
     'scope.published',
+    'scope.report_type',
     'scope.enrollment_term_ids',
     'scope.enrollment_term_names',
     'match.class_number',
     'match.class_number_count',
     'course.id',
     'course.sis_course_id',
-    'course.name',
-    'course.course_code',
-    'course.workflow_state',
     'course.account_id',
     'course.enrollment_term_id',
     'term.id',
@@ -674,14 +754,16 @@
     'section.id',
     'section.sis_section_id',
     'section.integration_id',
-    'section.sis_import_id',
     'section.name',
+    'section.workflow_state',
+    'section.created_by_sis',
     'section.course_id',
     'section.sis_course_id',
     'section.start_at',
     'section.end_at',
-    'section.restrict_enrollments_to_section_dates',
-    'section.nonxlist_course_id',
+    'account.id',
+    'account.sis_account_id',
+    'run.report_id',
     'run.status',
     'run.error'
   ].map(key => ({ key, label: key }));
@@ -1508,7 +1590,7 @@
                             <span class="accordion-chevron" aria-hidden="true">›</span>
                           </button>
                           <div class="action-accordion-panel" id="uwm-section-report-panel" role="region" aria-labelledby="uwm-section-report-trigger" hidden>
-                            <p class="tool-description">Matches class numbers in the uploaded CSV to sections in the selected account and term scope. This search includes both published and unpublished courses; the Published courses only setting does not apply.</p>
+                            <p class="tool-description">Matches class numbers in the uploaded CSV to a Canvas Provisioning section report for the selected account and terms. This search includes both published and unpublished courses; the Published courses only setting does not apply.</p>
                             <label class="field-label" for="uwm-section-class-number-column">
                               Class number column
                               <select class="field-select" id="uwm-section-class-number-column" disabled></select>
@@ -2417,65 +2499,103 @@
       return /^\d{5}$/.test(normalized) ? normalized : '';
     }
 
-    function sectionReportBaseRow(course, scope, generatedAt) {
-      const courseTerm = scope.termById.get(String(course.enrollment_term_id)) || {};
+    function sectionReportScopeFields(scope, generatedAt) {
       return {
         'run.generated_at': generatedAt,
         'scope.account_id': scope.accountId,
-        'scope.published': scope.publishedOnly,
+        'scope.published': false,
+        'scope.report_type': 'provisioning_csv',
         'scope.enrollment_term_ids': scope.allTerms
           ? 'all'
           : scope.terms.map(term => term.id).join('|'),
-        'scope.enrollment_term_names': scope.termLabel,
-        'course.id': course.id ?? '',
-        'course.sis_course_id': course.sis_course_id ?? '',
-        'course.name': course.name ?? '',
-        'course.course_code': course.course_code ?? '',
-        'course.workflow_state': course.workflow_state ?? '',
-        'course.account_id': course.account_id ?? '',
-        'course.enrollment_term_id': course.enrollment_term_id ?? '',
-        'term.id': courseTerm.id ?? course.enrollment_term_id ?? '',
-        'term.sis_term_id': courseTerm.sis_term_id ?? '',
-        'term.name': courseTerm.name ?? course.term?.name ?? ''
+        'scope.enrollment_term_names': scope.termLabel
       };
     }
 
-    function sectionReportRowsForCourse(course, sections, scope, generatedAt) {
-      const baseRow = sectionReportBaseRow(course, scope, generatedAt);
-      if (!sections.length) {
-        return [{
-          ...baseRow,
-          'match.class_number': '',
-          'match.class_number_count': '',
-          'run.status': 'no_sections',
-          'run.error': ''
-        }];
-      }
+    function sectionReportRowFromProvisioning(row, term, scope, generatedAt, reportId) {
+      const sisSectionId = row.section_id ?? '';
+      const classNumber = sectionClassNumber(sisSectionId);
+      return {
+        ...sectionReportScopeFields(scope, generatedAt),
+        'match.class_number': classNumber,
+        'match.class_number_count': '',
+        'course.id': row.canvas_course_id ?? '',
+        'course.sis_course_id': row.course_id ?? '',
+        'course.account_id': row.canvas_account_id ?? '',
+        'course.enrollment_term_id': term?.id ?? '',
+        'term.id': term?.id ?? '',
+        'term.sis_term_id': term?.sis_term_id ?? '',
+        'term.name': term?.name ?? (scope.allTerms ? 'All Terms' : ''),
+        'section.id': row.canvas_section_id ?? '',
+        'section.sis_section_id': sisSectionId,
+        'section.integration_id': row.integration_id ?? '',
+        'section.name': row.name ?? '',
+        'section.workflow_state': row.status ?? '',
+        'section.created_by_sis': row.created_by_sis ?? '',
+        'section.course_id': row.canvas_course_id ?? '',
+        'section.sis_course_id': row.course_id ?? '',
+        'section.start_at': row.start_date ?? '',
+        'section.end_at': row.end_date ?? '',
+        'account.id': row.canvas_account_id ?? '',
+        'account.sis_account_id': row.account_id ?? '',
+        'run.report_id': reportId,
+        'run.status': classNumber ? 'candidate' : 'missing_class_number',
+        'run.error': classNumber
+          ? ''
+          : 'The section SIS ID is missing or does not end in five digits.'
+      };
+    }
 
-      return sections.map(section => {
-        const classNumber = sectionClassNumber(section.sis_section_id);
-        return {
-          ...baseRow,
-          'match.class_number': classNumber,
-          'match.class_number_count': '',
-          'section.id': section.id ?? '',
-          'section.sis_section_id': section.sis_section_id ?? '',
-          'section.integration_id': section.integration_id ?? '',
-          'section.sis_import_id': section.sis_import_id ?? '',
-          'section.name': section.name ?? '',
-          'section.course_id': section.course_id ?? '',
-          'section.sis_course_id': section.sis_course_id ?? '',
-          'section.start_at': section.start_at ?? '',
-          'section.end_at': section.end_at ?? '',
-          'section.restrict_enrollments_to_section_dates':
-            section.restrict_enrollments_to_section_dates ?? '',
-          'section.nonxlist_course_id': section.nonxlist_course_id ?? '',
-          'run.status': classNumber ? 'matched' : 'missing_class_number',
-          'run.error': classNumber
-            ? ''
-            : 'The section SIS ID is missing or does not end in five digits.'
-        };
+    async function waitForCanvasReport(accountId, reportId, onProgress) {
+      const deadline = Date.now() + (2 * 60 * 60 * 1000);
+      while (Date.now() < deadline) {
+        const result = await canvasApi.get(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/reports/provisioning_csv/${encodeURIComponent(reportId)}`
+        );
+        const report = result.data || {};
+        if (typeof onProgress === 'function') onProgress(report);
+        if (report.status === 'complete') return report;
+        if (['error', 'errored', 'failed', 'aborted', 'canceled', 'cancelled'].includes(
+          String(report.status).toLowerCase()
+        )) {
+          throw new Error(report.message || `Canvas report ended with status ${report.status}.`);
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 3000));
+      }
+      throw new Error('Canvas section report did not finish within two hours.');
+    }
+
+    async function provisioningSectionRows(scope, term, reportIndex, reportCount, generatedAt) {
+      const body = { 'parameters[sections]': '1' };
+      if (term) body['parameters[enrollment_term_id]'] = String(term.id);
+      const termName = term?.name || 'All Terms';
+      const created = await canvasApi.request(
+        `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/reports/provisioning_csv`,
+        { method: 'POST', body }
+      );
+      const reportId = created.data?.id;
+      if (!reportId) throw new Error('Canvas did not return an ID for the section report.');
+
+      const report = await waitForCanvasReport(scope.accountId, reportId, current => {
+        const progress = Number(current.progress);
+        sectionProgress.value = ((reportIndex - 1) * 100) +
+          (Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0);
+        showSectionStatus(
+          `Canvas report ${reportIndex} of ${reportCount}: ${termName}. ` +
+          `Status: ${current.status || 'queued'}${Number.isFinite(progress) ? ` (${progress}%).` : '.'}`
+        );
       });
+      showSectionStatus(`Downloading Canvas section report ${reportIndex} of ${reportCount}: ${termName}.`);
+      const parsed = parseCsvText(await canvasReportCsv(report, 'sections.csv'));
+      const requiredHeaders = ['canvas_section_id', 'section_id', 'canvas_course_id', 'course_id'];
+      const missingHeader = requiredHeaders.find(header => !parsed.headers.includes(header));
+      if (missingHeader) {
+        throw new Error(`Canvas sections.csv is missing the expected ${missingHeader} column.`);
+      }
+      sectionProgress.value = reportIndex * 100;
+      return parsed.rows.map(row => (
+        sectionReportRowFromProvisioning(row, term, scope, generatedAt, reportId)
+      ));
     }
 
     function showSectionStatus(message, { isError = false } = {}) {
@@ -2501,84 +2621,43 @@
       sectionProgress.removeAttribute('max');
 
       try {
-        sectionStatusText.textContent = 'Loading courses from Canvas…';
-        let loadedCourseCount = 0;
-        let loadedCoursePages = 0;
-        const termRequests = scope.allTerms ? [null] : scope.terms;
-        const courseLists = await Promise.all(termRequests.map(async term => {
-          const courseParams = new URLSearchParams({ per_page: '100' });
-          courseParams.append('include[]', 'term');
-          if (term) courseParams.set('enrollment_term_id', String(term.id));
-
-          return canvasApi.getAll(
-            `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${courseParams.toString()}`,
-            {
-              onPage: page => {
-                loadedCourseCount += page.pageItems;
-                loadedCoursePages++;
-                const rateText = page.rateRemaining === null
-                  ? ''
-                  : ` Canvas quota remaining: ${page.rateRemaining}.`;
-                sectionStatusText.textContent =
-                  `Loading courses: ${loadedCourseCount} found across ${loadedCoursePages} page(s).${rateText}`;
-              }
-            }
-          );
-        }));
-        const courses = Array.from(
-          new Map(courseLists.flat().map(course => [String(course.id), course])).values()
-        );
-
-        sectionProgress.max = Math.max(1, courses.length);
+        const reportRequests = scope.allTerms ? [null] : scope.terms;
+        sectionProgress.max = Math.max(1, reportRequests.length * 100);
         sectionProgress.value = 0;
-        let completedCourses = 0;
-        let sectionsFound = 0;
-        let failedCourses = 0;
         const generatedAt = new Date().toISOString();
-        const rowsByCourse = new Array(courses.length);
+        const sectionRows = [];
+        const reportErrorRows = [];
+        let failedReports = 0;
 
-        await Promise.all(courses.map(async (course, index) => {
+        for (let index = 0; index < reportRequests.length; index++) {
+          const term = reportRequests[index];
           try {
-            const sections = await canvasApi.getAll(
-              `/api/v1/courses/${encodeURIComponent(String(course.id))}/sections?per_page=100`
-            );
-            sectionsFound += sections.length;
-            rowsByCourse[index] = sectionReportRowsForCourse(
-              course,
-              sections,
+            sectionRows.push(...await provisioningSectionRows(
               scope,
+              term,
+              index + 1,
+              reportRequests.length,
               generatedAt
-            );
+            ));
           } catch (error) {
-            failedCourses++;
-            rowsByCourse[index] = [{
-              ...sectionReportBaseRow(course, scope, generatedAt),
+            failedReports++;
+            sectionProgress.value = (index + 1) * 100;
+            reportErrorRows.push({
+              ...sectionReportScopeFields(scope, generatedAt),
               'match.class_number': '',
               'match.class_number_count': '',
-              'run.status': 'error',
+              'term.id': term?.id ?? '',
+              'term.sis_term_id': term?.sis_term_id ?? '',
+              'term.name': term?.name ?? (scope.allTerms ? 'All Terms' : ''),
+              'run.report_id': '',
+              'run.status': 'report_error',
               'run.error': error.message
-            }];
-          } finally {
-            completedCourses++;
-            sectionProgress.value = completedCourses;
-            const apiState = canvasApi.state();
-            const rateText = apiState.rateRemaining === null
-              ? ''
-              : ` Canvas quota remaining: ${apiState.rateRemaining}.`;
-            sectionStatusText.textContent =
-              `Courses checked: ${completedCourses} of ${courses.length}. ` +
-              `Sections found: ${sectionsFound}. Errors: ${failedCourses}.${rateText}`;
+            });
           }
-        }));
+        }
 
-        const sectionRows = rowsByCourse.flat();
         const sectionsByClassNumber = new Map();
-        const courseErrorRows = [];
         for (const row of sectionRows) {
-          if (row['run.status'] === 'error') {
-            courseErrorRows.push(row);
-            continue;
-          }
           const classNumber = row['match.class_number'];
           if (!classNumber) continue;
           const matches = sectionsByClassNumber.get(classNumber) || [];
@@ -2598,13 +2677,7 @@
             invalidInputRows++;
             rows.push({
               ...inputRow,
-              'run.generated_at': generatedAt,
-              'scope.account_id': scope.accountId,
-              'scope.published': false,
-              'scope.enrollment_term_ids': scope.allTerms
-                ? 'all'
-                : scope.terms.map(term => term.id).join('|'),
-              'scope.enrollment_term_names': scope.termLabel,
+              ...sectionReportScopeFields(scope, generatedAt),
               'match.class_number': '',
               'match.class_number_count': 0,
               'run.status': 'invalid_class_number',
@@ -2618,17 +2691,13 @@
             unmatchedInputRows++;
             rows.push({
               ...inputRow,
-              'run.generated_at': generatedAt,
-              'scope.account_id': scope.accountId,
-              'scope.published': false,
-              'scope.enrollment_term_ids': scope.allTerms
-                ? 'all'
-                : scope.terms.map(term => term.id).join('|'),
-              'scope.enrollment_term_names': scope.termLabel,
+              ...sectionReportScopeFields(scope, generatedAt),
               'match.class_number': classNumber,
               'match.class_number_count': 0,
-              'run.status': 'no_match',
-              'run.error': ''
+              'run.status': failedReports ? 'no_match_in_incomplete_scope' : 'no_match',
+              'run.error': failedReports
+                ? `${failedReports} Canvas section report(s) failed; this no-match result is incomplete.`
+                : ''
             });
             continue;
           }
@@ -2646,12 +2715,7 @@
           }
         }
 
-        for (const errorRow of courseErrorRows) {
-          rows.push({
-            ...errorRow,
-            'run.status': 'course_error'
-          });
-        }
+        rows.push(...reportErrorRows);
 
         const outputColumnNames = [...scope.sourceHeaders];
         for (const column of SECTION_REPORT_COLUMNS) {
@@ -2663,12 +2727,13 @@
           filename: `sec-match.acct-${scope.accountId}.unpub.${timestampForFilename()}.csv`
         });
 
-        if (!courses.length) sectionProgress.value = 1;
+        if (!reportRequests.length) sectionProgress.value = 1;
         showSectionStatus(
           `Complete. ${scope.inputRows.length} input row(s): ${matchedInputRows} matched, ` +
           `${ambiguousInputRows} with multiple matches, ${unmatchedInputRows} unmatched, ` +
-          `${invalidInputRows} invalid. ${failedCourses} course error(s). CSV downloaded.`,
-          { isError: failedCourses > 0 }
+          `${invalidInputRows} invalid. ${sectionRows.length} Canvas section row(s) loaded; ` +
+          `${failedReports} report error(s). CSV downloaded.`,
+          { isError: failedReports > 0 }
         );
       } catch (error) {
         console.error('Canvas section report failed.', error);
@@ -2720,12 +2785,9 @@
 
       pendingSectionScope = {
         accountId,
-        publishedOnly: false,
         allTerms: termScope.allTerms,
         terms: termScope.terms,
         termLabel: termScope.label,
-        termById: new Map(availableTerms.map(term => [String(term.id), term])),
-        sourceFileName: csvScope.fileName,
         sourceHeaders: [...csvScope.headers],
         inputRows: csvScope.rows.map(row => ({ ...row })),
         classNumberColumn
@@ -2733,9 +2795,10 @@
       setAdminScopeLocked(true);
       sectionStatus.hidden = true;
       sectionConfirmationText.textContent =
-        `Match ${pendingSectionScope.inputRows.length} CSV row(s) against sections in all non-deleted ` +
-        `courses in ${pendingSectionScope.termLabel} for account ${pendingSectionScope.accountId}? ` +
-        `The published-only setting is ignored. Canvas requires a separate section request for every course.`;
+        `Match ${pendingSectionScope.inputRows.length} CSV row(s) against the Canvas Provisioning ` +
+        `section data for ${pendingSectionScope.termLabel} in account ${pendingSectionScope.accountId}? ` +
+        `The published-only setting is ignored. Canvas will generate one Provisioning section report ` +
+        `for each selected term.`;
       sectionConfirmation.hidden = false;
       sectionContinue.focus();
     });

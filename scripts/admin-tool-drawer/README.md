@@ -57,21 +57,25 @@ term through `term.id`, `term.sis_term_id`, and `term.name`.
 Under **Admin → Courses**, **Get sections and class numbers** matches a selected column in the
 uploaded CSV against sections in the selected account and term scope. The global **Published courses
 only** setting does not apply: the matcher searches both published and unpublished non-deleted
-courses. Canvas does not permit sections to be included in the account-level course response, so the
-script loads the term-scoped courses first and then makes one paginated Sections API request per
-course through the shared scheduler.
+courses. The script asks Canvas to generate a server-side Provisioning report containing only
+`sections.csv`; it does not enumerate courses or call the Sections API once per course. Canvas accepts
+one enrollment term per report, so multiple selected terms are processed sequentially and then
+combined before matching. **All Terms** uses one unfiltered Provisioning report.
 
-Each section retains the Canvas response fields under `section.*`, including `section.id`,
-`section.sis_section_id`, `section.sis_course_id`, and `section.nonxlist_course_id`. The script derives
-`match.class_number` from exactly the final five digits of `section.sis_section_id`. Uploaded class
-numbers must contain exactly five digits. Values remain strings throughout CSV processing so a
-leading zero present in the file is preserved.
+Provisioning columns are mapped to the established API-style fields: `canvas_section_id` becomes
+`section.id`, `section_id` becomes `section.sis_section_id`, `canvas_course_id` becomes `course.id`,
+and `course_id` becomes `course.sis_course_id`. The script derives `match.class_number` from exactly
+the final five digits of `section.sis_section_id`. Uploaded class numbers must contain exactly five
+digits. Values remain strings throughout CSV processing so a leading zero present in the file is
+preserved.
 
 The result preserves every input column. `match.class_number_count` records how many scoped Canvas
 sections matched that input row. A unique match is `matched`, no match is `no_match`, malformed input
 is `invalid_class_number`, and every candidate for an ambiguous value is emitted as a separate
-`multiple_matches` row. Course-level API failures are also included rather than silently making the
-lookup appear complete. The compact filename is
+`multiple_matches` row. Report progress is polled through the Account Reports API, and failed term
+reports are included as `report_error` rows rather than silently making the lookup appear complete.
+Unmatched rows are marked `no_match_in_incomplete_scope` whenever any selected-term report failed.
+The compact filename is
 `sec-match.acct-<account-id>.unpub.<timestamp>.csv`; term scope remains in the CSV rather than the
 filename, and `unpub` records that no published-only filter was applied.
 
