@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.4.0
+// @version      0.5.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -14,6 +14,8 @@
   const CONFIG = {
     adminCacheKey: 'uwm-canvas-admin-tool-drawer:is-admin:v1',
     adminCacheTtlMs: 15 * 60 * 1000,
+    termsCacheKeyPrefix: 'uwm-canvas-admin-tool-drawer:terms:v1:',
+    termsCacheTtlMs: 15 * 60 * 1000,
     failedCheckCacheTtlMs: 60 * 1000,
     api: {
       maxConcurrency: 15,
@@ -410,7 +412,7 @@
     }
 
     async function* getPages(path, options = {}) {
-      const { onPage, ...requestOptions } = options;
+      const { onPage, itemsKey, ...requestOptions } = options;
       let nextUrl = path;
       let pageNumber = 0;
       let totalItems = 0;
@@ -427,12 +429,13 @@
 
         const currentPageIsTerminal = nextPageIsTerminal;
         const result = await request(nextUrl, { ...requestOptions, method: 'GET' });
-        if (!Array.isArray(result.data)) {
+        const pageItems = itemsKey ? result.data?.[itemsKey] : result.data;
+        if (!Array.isArray(pageItems)) {
           throw new Error(`Expected a paginated array from Canvas API: ${nextUrl}`);
         }
 
         pageNumber++;
-        totalItems += result.data.length;
+        totalItems += pageItems.length;
         const links = parsePaginationLinks(result.response.headers.get('Link'));
         const parsedNextUrl = normalizedPageUrl(links.next);
         const parsedLastUrl = normalizedPageUrl(links.last);
@@ -452,9 +455,9 @@
         }
 
         const page = {
-          items: result.data,
+          items: pageItems,
           pageNumber,
-          pageItems: result.data.length,
+          pageItems: pageItems.length,
           totalItems,
           hasNextPage: Boolean(nextUrl),
           isLastPage: !nextUrl,
@@ -546,12 +549,17 @@
     { key: 'report_generated_at', label: 'report_generated_at' },
     { key: 'scope_account_canvas_id', label: 'scope_account_canvas_id' },
     { key: 'published_courses_only', label: 'published_courses_only' },
+    { key: 'scope_enrollment_term_canvas_ids', label: 'scope_enrollment_term_canvas_ids' },
+    { key: 'scope_enrollment_term_names', label: 'scope_enrollment_term_names' },
     { key: 'course_canvas_id', label: 'course_canvas_id' },
     { key: 'course_sis_id', label: 'course_sis_id' },
     { key: 'course_name', label: 'course_name' },
     { key: 'course_code', label: 'course_code' },
     { key: 'course_workflow_state', label: 'course_workflow_state' },
     { key: 'course_account_canvas_id', label: 'course_account_canvas_id' },
+    { key: 'course_enrollment_term_canvas_id', label: 'course_enrollment_term_canvas_id' },
+    { key: 'course_enrollment_term_sis_id', label: 'course_enrollment_term_sis_id' },
+    { key: 'course_enrollment_term_name', label: 'course_enrollment_term_name' },
     { key: 'navigation_id', label: 'navigation_id' },
     { key: 'navigation_label', label: 'navigation_label' },
     { key: 'navigation_type', label: 'navigation_type' },
@@ -639,6 +647,7 @@
         .accordion-trigger:focus-visible,
         .subaccordion-trigger:focus-visible,
         .context-id:focus-visible,
+        .term-select:focus-visible,
         .scope-checkbox:focus-visible,
         .report-trigger:focus-visible,
         .confirmation-button:focus-visible {
@@ -882,6 +891,43 @@
           width: 17px;
         }
 
+        .term-scope {
+          margin-top: 13px;
+        }
+
+        .term-select {
+          background: #fffaf4;
+          border: 2px solid transparent;
+          border-radius: 8px;
+          color: #2a1012;
+          font: inherit;
+          font-size: 0.84rem;
+          line-height: 1.35;
+          min-height: 190px;
+          padding: 5px;
+          width: 100%;
+        }
+
+        .term-select:hover:not(:disabled) {
+          border-color: rgb(244 185 66 / 70%);
+        }
+
+        .term-select:disabled {
+          cursor: not-allowed;
+          opacity: 0.65;
+        }
+
+        .term-status {
+          color: var(--uwm-muted);
+          font-size: 0.75rem;
+          line-height: 1.4;
+          margin: 7px 0 0;
+        }
+
+        .term-status.is-error {
+          color: #ffd8dc;
+        }
+
         .subaccordions {
           display: grid;
           gap: 8px;
@@ -1120,6 +1166,14 @@
                     <input class="scope-checkbox" id="uwm-admin-published-only" type="checkbox" checked>
                     <span>Published courses only</span>
                   </label>
+
+                  <div class="term-scope">
+                    <label class="context-label" for="uwm-admin-term-scope">Terms</label>
+                    <select class="term-select" id="uwm-admin-term-scope" multiple disabled aria-describedby="uwm-admin-term-status">
+                      <option>Enter an account ID to load terms</option>
+                    </select>
+                    <p class="term-status" id="uwm-admin-term-status">Current terms are selected automatically. Hold Ctrl or Command to select more than one.</p>
+                  </div>
                 </div>
 
                 <div class="subaccordions" aria-label="Admin tool categories">
@@ -1210,6 +1264,8 @@
     const subaccordionItems = Array.from(shadowRoot.querySelectorAll('.subaccordion-item'));
     const adminContextInput = shadowRoot.querySelector('#uwm-admin-context-id');
     const publishedOnlyCheckbox = shadowRoot.querySelector('#uwm-admin-published-only');
+    const termSelect = shadowRoot.querySelector('#uwm-admin-term-scope');
+    const termStatus = shadowRoot.querySelector('#uwm-admin-term-status');
     const navigationReportTrigger = shadowRoot.querySelector('#uwm-navigation-links-report');
     const navigationConfirmation = shadowRoot.querySelector('#uwm-navigation-links-confirmation');
     const navigationConfirmationText = shadowRoot.querySelector('#uwm-navigation-links-confirmation-text');
@@ -1221,6 +1277,256 @@
 
     let pendingNavigationScope = null;
     let navigationReportRunning = false;
+    let availableTerms = [];
+    let termsAccountId = '';
+    let termsLoadSequence = 0;
+    let termsLoadTimer = null;
+
+    function termCacheKey(accountId) {
+      return `${CONFIG.termsCacheKeyPrefix}${accountId}`;
+    }
+
+    function readCachedTerms(accountId) {
+      try {
+        const rawValue = window.sessionStorage.getItem(termCacheKey(accountId));
+        if (!rawValue) return null;
+
+        const cached = JSON.parse(rawValue);
+        if (!Array.isArray(cached?.terms) || cached.expiresAt <= Date.now()) {
+          window.sessionStorage.removeItem(termCacheKey(accountId));
+          return null;
+        }
+
+        return cached;
+      } catch {
+        return null;
+      }
+    }
+
+    function cacheTerms(accountId, rootAccountId, terms) {
+      try {
+        window.sessionStorage.setItem(termCacheKey(accountId), JSON.stringify({
+          rootAccountId,
+          terms,
+          expiresAt: Date.now() + CONFIG.termsCacheTtlMs
+        }));
+      } catch {
+        // A fresh request on the next page is safe if session storage is unavailable.
+      }
+    }
+
+    function termTime(term, key) {
+      const value = Date.parse(term[key]);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function termGroup(term, now = Date.now()) {
+      if (/^default term$/i.test(String(term.name || '').trim())) return 'default';
+
+      const start = termTime(term, 'start_at');
+      const end = termTime(term, 'end_at');
+      if (start === null && end === null) return 'undated';
+      if (start !== null && start > now) return 'future';
+      if (end !== null && end < now) return 'past';
+      return 'current';
+    }
+
+    function termDateLabel(term) {
+      const formatter = new Intl.DateTimeFormat(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+      const start = termTime(term, 'start_at');
+      const end = termTime(term, 'end_at');
+      if (start === null && end === null) return 'no dates';
+      if (start === null) return `through ${formatter.format(end)}`;
+      if (end === null) return `from ${formatter.format(start)}`;
+      return `${formatter.format(start)} – ${formatter.format(end)}`;
+    }
+
+    function termOptionLabel(term) {
+      const hasCount = term.course_count !== null && term.course_count !== undefined;
+      const count = hasCount ? Number(term.course_count) : NaN;
+      const countLabel = Number.isFinite(count) ? ` · ${count} course${count === 1 ? '' : 's'}` : '';
+      return `${term.name || `Term ${term.id}`} · ${termDateLabel(term)}${countLabel}`;
+    }
+
+    function appendTermGroup(label, terms) {
+      if (!terms.length) return;
+
+      const group = document.createElement('optgroup');
+      group.label = label;
+      for (const term of terms) {
+        const option = document.createElement('option');
+        option.value = String(term.id);
+        option.textContent = termOptionLabel(term);
+        group.appendChild(option);
+      }
+      termSelect.appendChild(group);
+    }
+
+    function sortTermsForGroup(groupName, terms) {
+      return [...terms].sort((left, right) => {
+        if (groupName === 'future') {
+          return (termTime(left, 'start_at') ?? Infinity) - (termTime(right, 'start_at') ?? Infinity);
+        }
+        if (groupName === 'past') {
+          return (termTime(right, 'end_at') ?? -Infinity) - (termTime(left, 'end_at') ?? -Infinity);
+        }
+        if (groupName === 'current') {
+          return (termTime(right, 'start_at') ?? -Infinity) - (termTime(left, 'start_at') ?? -Infinity);
+        }
+        return String(left.name || '').localeCompare(String(right.name || ''));
+      });
+    }
+
+    function renderTermOptions(terms) {
+      const grouped = {
+        default: [],
+        current: [],
+        future: [],
+        past: [],
+        undated: []
+      };
+
+      for (const term of terms) grouped[termGroup(term)].push(term);
+      termSelect.replaceChildren();
+
+      const broadGroup = document.createElement('optgroup');
+      broadGroup.label = 'Flexible scope';
+      const currentOption = document.createElement('option');
+      currentOption.value = '__current__';
+      currentOption.textContent = 'All Current Terms';
+      currentOption.disabled = grouped.current.length === 0;
+      broadGroup.appendChild(currentOption);
+      const allOption = document.createElement('option');
+      allOption.value = '__all__';
+      allOption.textContent = 'All Terms';
+      broadGroup.appendChild(allOption);
+      for (const term of sortTermsForGroup('default', grouped.default)) {
+        const option = document.createElement('option');
+        option.value = String(term.id);
+        option.textContent = termOptionLabel(term);
+        broadGroup.appendChild(option);
+      }
+      termSelect.appendChild(broadGroup);
+
+      appendTermGroup('Current Terms', sortTermsForGroup('current', grouped.current));
+      appendTermGroup('Future Terms', sortTermsForGroup('future', grouped.future));
+      appendTermGroup('Past Terms', sortTermsForGroup('past', grouped.past));
+      appendTermGroup('Undated Terms', sortTermsForGroup('undated', grouped.undated));
+
+      const defaultIds = new Set(grouped.default.map(term => String(term.id)));
+      const currentTermsExist = grouped.current.length > 0;
+      const preferredIds = currentTermsExist ? new Set(['__current__']) : defaultIds;
+      const fallbackId = terms[0] ? String(terms[0].id) : '__all__';
+      for (const option of termSelect.options) {
+        option.selected = preferredIds.size
+          ? preferredIds.has(option.value)
+          : option.value === fallbackId;
+      }
+
+      termSelect.disabled = false;
+      termStatus.classList.remove('is-error');
+      termStatus.textContent = currentTermsExist
+        ? `All Current Terms is selected (${grouped.current.length} term${grouped.current.length === 1 ? '' : 's'} today). Hold Ctrl or Command to add other terms.`
+        : 'No current dated terms were found; a safer fallback was selected. Hold Ctrl or Command to select more than one.';
+    }
+
+    async function loadTermsForAccount(accountId) {
+      const loadSequence = ++termsLoadSequence;
+      availableTerms = [];
+      termsAccountId = '';
+      termSelect.disabled = true;
+      termSelect.innerHTML = '<option>Loading terms…</option>';
+      termStatus.classList.remove('is-error');
+      termStatus.textContent = 'Loading term scope from Canvas…';
+
+      try {
+        let cached = readCachedTerms(accountId);
+        if (!cached) {
+          const accountResult = await canvasApi.get(
+            `/api/v1/accounts/${encodeURIComponent(accountId)}`
+          );
+          const account = accountResult.data || {};
+          const rootAccountId = String(
+            account.root_account_id ||
+            window.ENV?.DOMAIN_ROOT_ACCOUNT_ID ||
+            window.ENV?.ROOT_ACCOUNT_ID ||
+            account.id ||
+            accountId
+          );
+          const params = new URLSearchParams({
+            subaccount_id: accountId,
+            per_page: '100'
+          });
+          params.append('include[]', 'course_count');
+          params.append('include[]', 'overrides');
+          const terms = await canvasApi.getAll(
+            `/api/v1/accounts/${encodeURIComponent(rootAccountId)}/terms?${params.toString()}`,
+            { itemsKey: 'enrollment_terms' }
+          );
+          cached = { rootAccountId, terms };
+          cacheTerms(accountId, rootAccountId, terms);
+        }
+
+        if (loadSequence !== termsLoadSequence || adminContextInput.value.trim() !== accountId) return;
+
+        availableTerms = cached.terms;
+        termsAccountId = accountId;
+        renderTermOptions(availableTerms);
+      } catch (error) {
+        if (loadSequence !== termsLoadSequence) return;
+        console.error('Canvas Admin Tool Drawer could not load terms.', error);
+        termSelect.innerHTML = '<option>Terms unavailable</option>';
+        termSelect.disabled = true;
+        termStatus.classList.add('is-error');
+        termStatus.textContent = `Terms could not be loaded: ${error.message}`;
+      }
+    }
+
+    function scheduleTermsLoad() {
+      window.clearTimeout(termsLoadTimer);
+      const accountId = adminContextInput.value.trim();
+      if (!/^\d+$/.test(accountId)) {
+        termsLoadSequence++;
+        availableTerms = [];
+        termsAccountId = '';
+        termSelect.innerHTML = '<option>Enter an account ID to load terms</option>';
+        termSelect.disabled = true;
+        termStatus.classList.remove('is-error');
+        termStatus.textContent = 'Current terms are selected automatically. Hold Ctrl or Command to select more than one.';
+        return;
+      }
+
+      termsLoadTimer = window.setTimeout(() => loadTermsForAccount(accountId), 350);
+    }
+
+    function selectedTermScope() {
+      const values = Array.from(termSelect.selectedOptions, option => option.value);
+      if (values.includes('__all__')) {
+        return { allTerms: true, terms: [], label: 'All Terms' };
+      }
+
+      const includesCurrent = values.includes('__current__');
+      const selectedIds = new Set(values.filter(value => !value.startsWith('__')));
+      if (includesCurrent) {
+        for (const term of availableTerms) {
+          if (termGroup(term) === 'current') selectedIds.add(String(term.id));
+        }
+      }
+      const terms = availableTerms.filter(term => selectedIds.has(String(term.id)));
+      const explicitTerms = terms.filter(term => !includesCurrent || termGroup(term) !== 'current');
+      const labelParts = [];
+      if (includesCurrent) labelParts.push('All Current Terms');
+      labelParts.push(...explicitTerms.map(term => term.name || `Term ${term.id}`));
+      return {
+        allTerms: false,
+        terms,
+        label: labelParts.join(', ')
+      };
+    }
 
     function openContext(contextName) {
       for (const item of accordionItems) {
@@ -1265,12 +1571,31 @@
       });
     }
 
+    adminContextInput.addEventListener('input', scheduleTermsLoad);
+    termSelect.addEventListener('change', () => {
+      const selected = Array.from(termSelect.selectedOptions);
+      const allTermsOption = selected.find(option => option.value === '__all__');
+      if (allTermsOption && selected.length > 1) {
+        for (const option of termSelect.options) option.selected = option === allTermsOption;
+      }
+
+      const scope = selectedTermScope();
+      termStatus.classList.remove('is-error');
+      termStatus.textContent = scope.label
+        ? `Selected: ${scope.label}. Hold Ctrl or Command to select more than one.`
+        : 'Select at least one term scope.';
+    });
+
     openContext(canvasContext.activeContext);
     openAdminCategory('courses');
+    scheduleTermsLoad();
 
     function setAdminScopeLocked(isLocked) {
       adminContextInput.disabled = isLocked;
       publishedOnlyCheckbox.disabled = isLocked;
+      termSelect.disabled = isLocked ||
+        termsAccountId !== adminContextInput.value.trim() ||
+        !availableTerms.length;
     }
 
     function showNavigationStatus(message, { isError = false } = {}) {
@@ -1300,16 +1625,24 @@
     }
 
     function navigationRowsForCourse(course, tabs, scope, generatedAt) {
+      const courseTerm = scope.termById.get(String(course.enrollment_term_id)) || {};
       const baseRow = {
         report_generated_at: generatedAt,
         scope_account_canvas_id: scope.accountId,
         published_courses_only: scope.publishedOnly,
+        scope_enrollment_term_canvas_ids: scope.allTerms
+          ? 'all'
+          : scope.terms.map(term => term.id).join('|'),
+        scope_enrollment_term_names: scope.termLabel,
         course_canvas_id: course.id ?? '',
         course_sis_id: course.sis_course_id ?? '',
         course_name: course.name ?? '',
         course_code: course.course_code ?? '',
         course_workflow_state: course.workflow_state ?? '',
-        course_account_canvas_id: course.account_id ?? ''
+        course_account_canvas_id: course.account_id ?? '',
+        course_enrollment_term_canvas_id: course.enrollment_term_id ?? '',
+        course_enrollment_term_sis_id: courseTerm.sis_term_id ?? '',
+        course_enrollment_term_name: courseTerm.name ?? course.term?.name ?? ''
       };
 
       if (!tabs.length) {
@@ -1343,23 +1676,35 @@
       navigationProgress.removeAttribute('value');
       navigationProgress.removeAttribute('max');
 
-      const courseParams = new URLSearchParams({ per_page: '100' });
-      if (scope.publishedOnly) courseParams.set('published', 'true');
-
       try {
         navigationStatusText.textContent = 'Loading courses from Canvas…';
 
-        const courses = await canvasApi.getAll(
-          `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${courseParams.toString()}`,
-          {
-            onPage: page => {
-              const rateText = page.rateRemaining === null
-                ? ''
-                : ` Canvas quota remaining: ${page.rateRemaining}.`;
-              navigationStatusText.textContent =
-                `Loading courses: ${page.totalItems} found across ${page.pageNumber} page(s).${rateText}`;
+        let loadedCourseCount = 0;
+        let loadedCoursePages = 0;
+        const termRequests = scope.allTerms ? [null] : scope.terms;
+        const courseLists = await Promise.all(termRequests.map(async term => {
+          const courseParams = new URLSearchParams({ per_page: '100' });
+          courseParams.append('include[]', 'term');
+          if (scope.publishedOnly) courseParams.set('published', 'true');
+          if (term) courseParams.set('enrollment_term_id', String(term.id));
+
+          return canvasApi.getAll(
+            `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${courseParams.toString()}`,
+            {
+              onPage: page => {
+                loadedCourseCount += page.pageItems;
+                loadedCoursePages++;
+                const rateText = page.rateRemaining === null
+                  ? ''
+                  : ` Canvas quota remaining: ${page.rateRemaining}.`;
+                navigationStatusText.textContent =
+                  `Loading courses: ${loadedCourseCount} found across ${loadedCoursePages} page(s).${rateText}`;
+              }
             }
-          }
+          );
+        }));
+        const courses = Array.from(
+          new Map(courseLists.flat().map(course => [String(course.id), course])).values()
         );
 
         navigationProgress.max = Math.max(1, courses.length);
@@ -1390,12 +1735,21 @@
               report_generated_at: generatedAt,
               scope_account_canvas_id: scope.accountId,
               published_courses_only: scope.publishedOnly,
+              scope_enrollment_term_canvas_ids: scope.allTerms
+                ? 'all'
+                : scope.terms.map(term => term.id).join('|'),
+              scope_enrollment_term_names: scope.termLabel,
               course_canvas_id: course.id ?? '',
               course_sis_id: course.sis_course_id ?? '',
               course_name: course.name ?? '',
               course_code: course.course_code ?? '',
               course_workflow_state: course.workflow_state ?? '',
               course_account_canvas_id: course.account_id ?? '',
+              course_enrollment_term_canvas_id: course.enrollment_term_id ?? '',
+              course_enrollment_term_sis_id:
+                scope.termById.get(String(course.enrollment_term_id))?.sis_term_id ?? '',
+              course_enrollment_term_name:
+                scope.termById.get(String(course.enrollment_term_id))?.name ?? course.term?.name ?? '',
               status: 'error',
               error: error.message
             }];
@@ -1415,8 +1769,9 @@
 
         const rows = rowsByCourse.flat();
         const scopeLabel = scope.publishedOnly ? 'published' : 'all';
+        const termScopeLabel = scope.allTerms ? 'all-terms' : 'term-scoped';
         const filename =
-          `canvas-navigation-links.account-${scope.accountId}.${scopeLabel}.` +
+          `canvas-navigation-links.account-${scope.accountId}.${scopeLabel}.${termScopeLabel}.` +
           `${timestampForFilename()}.csv`;
 
         downloadCsv({
@@ -1460,9 +1815,27 @@
         return;
       }
 
+      if (termSelect.disabled || termsAccountId !== accountId) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Wait for the terms for this account to finish loading.';
+        return;
+      }
+
+      const termScope = selectedTermScope();
+      if (!termScope.allTerms && !termScope.terms.length) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Select at least one term scope before starting the report.';
+        termSelect.focus();
+        return;
+      }
+
       pendingNavigationScope = {
         accountId,
-        publishedOnly: publishedOnlyCheckbox.checked
+        publishedOnly: publishedOnlyCheckbox.checked,
+        allTerms: termScope.allTerms,
+        terms: termScope.terms,
+        termLabel: termScope.label,
+        termById: new Map(availableTerms.map(term => [String(term.id), term]))
       };
 
       const courseScopeText = pendingNavigationScope.publishedOnly
@@ -1473,7 +1846,7 @@
       setAdminScopeLocked(true);
       navigationStatus.hidden = true;
       navigationConfirmationText.textContent =
-        `Collect navigation links for ${courseScopeText} in account ` +
+        `Collect navigation links for ${courseScopeText} in ${pendingNavigationScope.termLabel} for account ` +
         `${pendingNavigationScope.accountId}? This may take a long time.`;
       navigationConfirmation.hidden = false;
       navigationContinue.focus();

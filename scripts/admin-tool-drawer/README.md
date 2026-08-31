@@ -18,13 +18,19 @@ field remains editable so an admin can target a different account, course, or it
 
 The Admin context currently contains **Courses**, **People**, and **Sub-Accounts** sub-accordions.
 Its shared **Published courses only** scope is enabled by default and is applied to Admin reports that
-operate on courses.
+operate on courses. A grouped, multiple-selection **Terms** scope provides flexible meta-options for
+**All Current Terms** and **All Terms**, followed by the Canvas **Default Term** and individual
+**Current Terms**, **Future Terms**, **Past Terms**, and **Undated Terms**. All Current Terms is the
+safe default and can be combined with individual terms from the other groups.
 
 ### Course navigation links report
 
 Under **Admin → Courses**, **Get all navigation links** creates a CSV containing the available Canvas
 navigation tabs for every course in the selected account scope. Each row includes the course Canvas
-ID, course SIS ID, course metadata, tab metadata, and both relative and absolute navigation URLs.
+ID, course SIS ID, term Canvas ID, term SIS ID, course metadata, tab metadata, and both relative and
+absolute navigation URLs. Canvas filters the course-list requests by each selected enrollment term
+before the script begins collecting course tabs; choosing All Terms is the intentionally broad
+exception.
 
 Starting the report opens an inline Continue/Cancel confirmation. While it runs, the drawer displays
 the number of courses checked, navigation links found, course errors, and the latest Canvas quota
@@ -47,6 +53,8 @@ All REST API work in the drawer goes through one shared request scheduler. It:
 * Retries throttled, timed-out, and transient server responses with exponential backoff and jitter.
 * Stops after five retries and returns a detailed error to the calling tool.
 * Provides a pagination helper that follows Canvas `Link` headers through the same scheduler.
+* Supports both ordinary paginated arrays and Canvas's named response envelopes, including the
+  `enrollment_terms` response.
 * Provides both a streaming page iterator and an accumulating `getAll` helper.
 * Stops pagination cycles and handles Canvas responses where `rel="next"` and `rel="last"` identify
   the same terminal page.
@@ -68,8 +76,8 @@ spreadsheet applications might otherwise interpret as formulas.
 1. Sign in to a Canvas site hosted on `instructure.com` with an account-admin role.
 2. Select the tools icon in the upper-right corner.
 3. Confirm or enter the Canvas ID in the relevant Admin, Course, or Page accordion.
-4. For the navigation report, open **Admin → Courses**, select whether to limit the scope to published
-   courses, and select **Get all navigation links**.
+4. For the navigation report, open **Admin → Courses**, select the term scope and whether to limit the
+   scope to published courses, and select **Get all navigation links**.
 5. Close the drawer with its close button, the shaded page backdrop, or the Escape key.
 
 The drawer currently contains no data-changing tools.
