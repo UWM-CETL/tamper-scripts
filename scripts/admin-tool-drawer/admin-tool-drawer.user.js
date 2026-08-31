@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.8.0
+// @version      0.9.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -617,12 +617,8 @@
 
   function parseCanvasBoolean(value) {
     const normalized = String(value ?? '').trim().toLowerCase();
-    if (['false', '0', 'no', 'n', 'off', 'show', 'shown', 'visible', 'enable', 'enabled'].includes(normalized)) {
-      return false;
-    }
-    if (['true', '1', 'yes', 'y', 'on', 'hide', 'hidden', 'disable', 'disabled'].includes(normalized)) {
-      return true;
-    }
+    if (normalized === 'false') return false;
+    if (normalized === 'true') return true;
     return null;
   }
 
@@ -1485,13 +1481,13 @@
                           </div>
                         </section>
 
-                        <section class="action-accordion-item" data-course-action="enable-navigation">
+                        <section class="action-accordion-item" data-course-action="set-navigation-visibility">
                           <button class="action-accordion-trigger" type="button" id="uwm-enable-navigation-trigger" aria-expanded="false" aria-controls="uwm-enable-navigation-panel">
-                            <span>Enable in course navigation</span>
+                            <span>Show or hide course navigation</span>
                             <span class="accordion-chevron" aria-hidden="true">›</span>
                           </button>
                           <div class="action-accordion-panel" id="uwm-enable-navigation-panel" role="region" aria-labelledby="uwm-enable-navigation-trigger" hidden>
-                            <p class="tool-description">Uses the uploaded CSV to enable a selected navigation tab in each listed course. Analysis is read-only until you confirm the change plan.</p>
+                            <p class="tool-description">Uses the uploaded CSV to show or hide a selected navigation tab in each listed course. Analysis is read-only until you confirm the change plan.</p>
                             <div class="mapping-grid">
                               <label class="field-label" for="uwm-enable-navigation-tool-column">
                                 Navigation tool ID column
@@ -1502,7 +1498,7 @@
                                 <select class="field-select" id="uwm-enable-navigation-value-column" disabled></select>
                               </label>
                             </div>
-                            <p class="tool-description">The tool column should contain a Canvas tab ID such as <code>context_external_tool_4</code>. The new value must mean false, visible, shown, or enabled.</p>
+                            <p class="tool-description">The tool column should contain a Canvas tab ID such as <code>context_external_tool_4</code>. The hidden value must be <code>false</code> to show the tab or <code>true</code> to hide it. Those are the only accepted values.</p>
                             <button class="action-button" id="uwm-enable-navigation-analyze" type="button" disabled>Analyze CSV</button>
 
                             <div class="analysis-summary" id="uwm-enable-navigation-analysis" hidden>
@@ -1512,7 +1508,7 @@
                             <div class="confirmation" id="uwm-enable-navigation-confirmation" hidden>
                               <p id="uwm-enable-navigation-confirmation-text"></p>
                               <div class="confirmation-actions">
-                                <button class="confirmation-button primary" id="uwm-enable-navigation-continue" type="button">Enable navigation</button>
+                                <button class="confirmation-button primary" id="uwm-enable-navigation-continue" type="button">Apply changes</button>
                                 <button class="confirmation-button" id="uwm-enable-navigation-cancel" type="button">Cancel</button>
                               </div>
                             </div>
@@ -2353,9 +2349,12 @@
 
     function enableNavigationCounts(entries) {
       const counts = {
-        willEnable: 0,
-        enabled: 0,
-        alreadyEnabled: 0,
+        willShow: 0,
+        willHide: 0,
+        shown: 0,
+        hidden: 0,
+        alreadyShown: 0,
+        alreadyHidden: 0,
         unavailable: 0,
         invalid: 0,
         duplicate: 0,
@@ -2363,9 +2362,12 @@
       };
 
       for (const entry of entries) {
-        if (entry.status === 'will_enable') counts.willEnable++;
-        else if (entry.status === 'enabled') counts.enabled++;
-        else if (entry.status === 'already_enabled') counts.alreadyEnabled++;
+        if (entry.status === 'will_show') counts.willShow++;
+        else if (entry.status === 'will_hide') counts.willHide++;
+        else if (entry.status === 'shown') counts.shown++;
+        else if (entry.status === 'hidden') counts.hidden++;
+        else if (entry.status === 'already_shown') counts.alreadyShown++;
+        else if (entry.status === 'already_hidden') counts.alreadyHidden++;
         else if (entry.status === 'unavailable') counts.unavailable++;
         else if (entry.status === 'invalid') counts.invalid++;
         else if (entry.status === 'duplicate') counts.duplicate++;
@@ -2376,9 +2378,12 @@
 
     function enableNavigationSummaryText(entries) {
       const counts = enableNavigationCounts(entries);
-      const changedText = counts.enabled ? `${counts.enabled} enabled, ` : '';
-      return `${entries.length} CSV row(s): ${changedText}${counts.willEnable} will be enabled, ` +
-        `${counts.alreadyEnabled} already enabled, ${counts.unavailable} unavailable, ` +
+      const changedText = counts.shown || counts.hidden
+        ? `${counts.shown} shown, ${counts.hidden} hidden, `
+        : '';
+      return `${entries.length} CSV row(s): ${changedText}${counts.willShow} will be shown, ` +
+        `${counts.willHide} will be hidden, ${counts.alreadyShown} already shown, ` +
+        `${counts.alreadyHidden} already hidden, ${counts.unavailable} unavailable, ` +
         `${counts.invalid} invalid, ${counts.duplicate} duplicate, ${counts.errors} API error(s).`;
     }
 
@@ -2427,10 +2432,7 @@
             entry.courseRef = courseApiIdentifier(entry.courseValue, csvCourseIdType.value);
             if (!entry.tabId) throw new Error('Navigation tool ID is blank.');
             if (entry.desiredHidden === null) {
-              throw new Error(`New hidden value is not recognizable: ${row[valueColumn] ?? ''}`);
-            }
-            if (entry.desiredHidden !== false) {
-              throw new Error('This action only accepts a new hidden value of false/enabled/visible.');
+              throw new Error(`New hidden value must be true or false; received: ${row[valueColumn] ?? ''}`);
             }
           } catch (error) {
             entry.status = 'invalid';
@@ -2445,8 +2447,17 @@
           if (entry.status) continue;
           const targetKey = `${entry.courseRef}\u0000${entry.tabId}`;
           if (firstByTarget.has(targetKey)) {
-            entry.status = 'duplicate';
-            entry.error = `Duplicates CSV row ${firstByTarget.get(targetKey).row['input.row']}.`;
+            const first = firstByTarget.get(targetKey);
+            if (first.desiredHidden !== entry.desiredHidden) {
+              const message = `Conflicting hidden values for the same course and tab in CSV rows ${first.row['input.row']} and ${entry.row['input.row']}.`;
+              first.status = 'invalid';
+              first.error = message;
+              entry.status = 'invalid';
+              entry.error = message;
+            } else {
+              entry.status = 'duplicate';
+              entry.error = `Duplicates CSV row ${first.row['input.row']}.`;
+            }
           } else {
             firstByTarget.set(targetKey, entry);
           }
@@ -2496,11 +2507,15 @@
 
           if (['home', 'settings'].includes(entry.tabId)) {
             entry.status = 'unavailable';
-            entry.error = 'Canvas does not allow this navigation tab to be hidden or enabled.';
+            entry.error = 'Canvas does not allow this navigation tab to be hidden or moved.';
+          } else if (entry.desiredHidden === true && tab.hidden === true) {
+            entry.status = 'already_hidden';
+          } else if (entry.desiredHidden === true) {
+            entry.status = 'will_hide';
           } else if (tab.hidden === true) {
-            entry.status = 'will_enable';
+            entry.status = 'will_show';
           } else {
-            entry.status = 'already_enabled';
+            entry.status = 'already_shown';
           }
         }
 
@@ -2515,9 +2530,10 @@
         enableNavigationAnalysis.hidden = false;
         showEnableNavigationStatus('Read-only analysis complete.');
 
-        if (counts.willEnable > 0) {
+        const changeCount = counts.willShow + counts.willHide;
+        if (changeCount > 0) {
           enableNavigationConfirmationText.textContent =
-            `Enable ${counts.willEnable} navigation tab(s) now? Already-enabled, unavailable, invalid, duplicate, and failed rows will not be changed.`;
+            `Apply ${changeCount} navigation change(s) now: show ${counts.willShow} and hide ${counts.willHide}? Unchanged, unavailable, invalid, duplicate, and failed rows will not be written.`;
           enableNavigationConfirmation.hidden = false;
           enableNavigationContinue.focus();
         } else {
@@ -2525,7 +2541,7 @@
           navigationReportTrigger.disabled = false;
         }
       } catch (error) {
-        console.error('Enable navigation analysis failed.', error);
+        console.error('Navigation visibility analysis failed.', error);
         enableNavigationPlan = null;
         enableNavigationProgress.removeAttribute('value');
         enableNavigationProgress.removeAttribute('max');
@@ -2561,7 +2577,7 @@
       const rows = plan.entries.map(entry => {
         const row = {
           ...entry.row,
-          'run.action': 'enable_navigation',
+          'run.action': 'set_navigation_hidden',
           'run.completed_at': completedAt,
           'run.status': entry.status,
           'run.error': entry.error || ''
@@ -2589,23 +2605,25 @@
       enableNavigationConfirmation.hidden = true;
       enableNavigationContinue.disabled = true;
       enableNavigationCancel.disabled = true;
-      const changes = enableNavigationPlan.entries.filter(entry => entry.status === 'will_enable');
+      const changes = enableNavigationPlan.entries.filter(entry => (
+        entry.status === 'will_show' || entry.status === 'will_hide'
+      ));
       let completed = 0;
       let succeeded = 0;
       let failed = 0;
       enableNavigationProgress.max = Math.max(1, changes.length);
       enableNavigationProgress.value = 0;
-      showEnableNavigationStatus(`Enabling navigation: 0 of ${changes.length}.`);
+      showEnableNavigationStatus(`Updating navigation: 0 of ${changes.length}.`);
 
       try {
         await Promise.all(changes.map(async entry => {
           try {
             const result = await canvasApi.request(
               `/api/v1/courses/${encodeURIComponent(entry.courseRef)}/tabs/${encodeURIComponent(entry.tabId)}`,
-              { method: 'PUT', body: { hidden: 'false' } }
+              { method: 'PUT', body: { hidden: String(entry.desiredHidden) } }
             );
             entry.tab = result.data || entry.tab;
-            entry.status = 'enabled';
+            entry.status = entry.desiredHidden ? 'hidden' : 'shown';
             entry.error = '';
             succeeded++;
           } catch (error) {
@@ -2620,7 +2638,7 @@
               ? ''
               : ` Canvas quota remaining: ${apiState.rateRemaining}.`;
             showEnableNavigationStatus(
-              `Enabling navigation: ${completed} of ${changes.length}. ` +
+              `Updating navigation: ${completed} of ${changes.length}. ` +
               `Succeeded: ${succeeded}. Errors: ${failed}.${rateText}`,
               { isError: failed > 0 }
             );
@@ -2633,17 +2651,17 @@
           .replace(/[^a-z0-9._-]+/gi, '-');
         downloadCsv({
           ...output,
-          filename: `${baseName || 'canvas-courses'}.enable-navigation.${timestampForFilename()}.csv`
+          filename: `${baseName || 'canvas-courses'}.set-navigation-hidden.${timestampForFilename()}.csv`
         });
 
         enableNavigationAnalysisText.textContent = enableNavigationSummaryText(enableNavigationPlan.entries);
         enableNavigationAnalysis.hidden = false;
         showEnableNavigationStatus(
-          `Complete. ${succeeded} navigation tab(s) enabled; ${failed} error(s). Results CSV downloaded.`,
+          `Complete. ${succeeded} navigation tab(s) updated; ${failed} error(s). Results CSV downloaded.`,
           { isError: failed > 0 }
         );
       } catch (error) {
-        console.error('Enable navigation action failed.', error);
+        console.error('Navigation visibility action failed.', error);
         showEnableNavigationStatus(`Action stopped: ${error.message}`, { isError: true });
       } finally {
         enableNavigationRunning = false;

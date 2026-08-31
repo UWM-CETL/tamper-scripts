@@ -51,23 +51,36 @@ the values are Canvas course IDs or SIS course IDs. The parsed rows and that cou
 by CSV-driven actions in the Courses accordion. Duplicate or blank headers are rejected so later
 field mappings remain unambiguous.
 
-### Enable in course navigation
+### Show or hide course navigation
 
-The **Enable in course navigation** action requires two additional, action-specific mappings:
+The **Show or hide course navigation** action requires two additional, action-specific mappings:
 
 * **Navigation tool ID column** contains Canvas tab IDs such as `context_external_tool_4`.
-* **New hidden value column** contains a value meaning false/enabled/visible. Values requesting true
-  are rejected because this action only enables navigation.
+* **New hidden value column** uses the canonical Canvas `hidden` values below. These are the only
+  accepted values; matching is case-insensitive so Excel's `TRUE` and `FALSE` are valid.
+
+| CSV value | Requested result |
+| --- | --- |
+| `false` | Show the tab in course navigation |
+| `true` | Hide the tab from course navigation |
 
 **Analyze CSV** is read-only. It gets the current tabs for each unique course and classifies every
-input row as will enable, already enabled, unavailable, invalid, duplicate, or API error. No write is
-made until the user confirms the resulting change count. Confirmed rows are updated with
-`hidden=false` through the Canvas Tabs API. Home and Settings are reported as unavailable because
-Canvas does not allow them to be managed this way.
+input row as will show, will hide, already shown, already hidden, unavailable, invalid, duplicate, or
+API error. No write is made until the user confirms separate show and hide counts. Confirmed rows are
+updated through the Canvas Tabs API with `hidden=false` to show them or `hidden=true` to hide them.
+Conflicting values for the same course and tab are rejected rather than choosing one. Home and
+Settings are reported as unavailable because Canvas does not allow those tabs to be hidden or moved.
+
+For a tab that is already available in a course, `hidden` is the only value required to change whether
+the tab is placed in course navigation. `position` is optional and controls ordering. This does not
+override Canvas permissions or an external tool's own visibility configuration: a shown tab can still
+be unavailable to a particular user role. The administrator running the action must also have
+permission to manage course content.
 
 After execution, a results CSV preserves the source columns and adds the returned `tab.*` fields plus
-`run.action`, `run.completed_at`, `run.status`, and `run.error`. The shared scheduler applies the same
-concurrency, quota, retry, and backoff controls used by reports.
+`run.action`, `run.completed_at`, `run.status`, and `run.error`. `run.action` is canonically
+`set_navigation_hidden`; status values distinguish shown and hidden results. The shared scheduler
+applies the same concurrency, quota, retry, and backoff controls used by reports.
 
 The icon is only added when the current Canvas user can view at least one account through Canvas's
 Accounts API. Canvas normally returns an empty account list for students and teachers. The result is
