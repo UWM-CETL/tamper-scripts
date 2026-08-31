@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.9.1
+// @version      0.10.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -648,6 +648,39 @@
     'tab.full_url',
     'tab.url',
     'tab.unused',
+    'run.status',
+    'run.error'
+  ].map(key => ({ key, label: key }));
+
+  const SECTION_REPORT_COLUMNS = [
+    'run.generated_at',
+    'scope.account_id',
+    'scope.published',
+    'scope.enrollment_term_ids',
+    'scope.enrollment_term_names',
+    'match.class_number',
+    'match.class_number_count',
+    'course.id',
+    'course.sis_course_id',
+    'course.name',
+    'course.course_code',
+    'course.workflow_state',
+    'course.account_id',
+    'course.enrollment_term_id',
+    'term.id',
+    'term.sis_term_id',
+    'term.name',
+    'section.id',
+    'section.sis_section_id',
+    'section.integration_id',
+    'section.sis_import_id',
+    'section.name',
+    'section.course_id',
+    'section.sis_course_id',
+    'section.start_at',
+    'section.end_at',
+    'section.restrict_enrollments_to_section_dates',
+    'section.nonxlist_course_id',
     'run.status',
     'run.error'
   ].map(key => ({ key, label: key }));
@@ -1481,6 +1514,30 @@
                           </div>
                         </section>
 
+                        <section class="action-accordion-item" data-course-action="section-report">
+                          <button class="action-accordion-trigger" type="button" id="uwm-section-report-trigger" aria-expanded="false" aria-controls="uwm-section-report-panel">
+                            <span>Get sections and class numbers</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-section-report-panel" role="region" aria-labelledby="uwm-section-report-trigger" hidden>
+                            <button class="report-trigger" id="uwm-sections-report" type="button">Prepare section report</button>
+                            <p class="tool-description">Downloads sections for courses in the selected account and term scope. Each section SIS ID is paired with the five-digit class number at its end.</p>
+
+                            <div class="confirmation" id="uwm-sections-confirmation" hidden>
+                              <p id="uwm-sections-confirmation-text"></p>
+                              <div class="confirmation-actions">
+                                <button class="confirmation-button primary" id="uwm-sections-continue" type="button">Continue</button>
+                                <button class="confirmation-button" id="uwm-sections-cancel" type="button">Cancel</button>
+                              </div>
+                            </div>
+
+                            <div class="run-status" id="uwm-sections-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-sections-progress"></progress>
+                              <p id="uwm-sections-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
+
                         <section class="action-accordion-item" data-course-action="set-navigation-visibility">
                           <button class="action-accordion-trigger" type="button" id="uwm-enable-navigation-trigger" aria-expanded="false" aria-controls="uwm-enable-navigation-panel">
                             <span>Show or hide course navigation</span>
@@ -1602,6 +1659,14 @@
     const navigationStatus = shadowRoot.querySelector('#uwm-navigation-links-status');
     const navigationStatusText = shadowRoot.querySelector('#uwm-navigation-links-status-text');
     const navigationProgress = shadowRoot.querySelector('#uwm-navigation-links-progress');
+    const sectionReportTrigger = shadowRoot.querySelector('#uwm-sections-report');
+    const sectionConfirmation = shadowRoot.querySelector('#uwm-sections-confirmation');
+    const sectionConfirmationText = shadowRoot.querySelector('#uwm-sections-confirmation-text');
+    const sectionContinue = shadowRoot.querySelector('#uwm-sections-continue');
+    const sectionCancel = shadowRoot.querySelector('#uwm-sections-cancel');
+    const sectionStatus = shadowRoot.querySelector('#uwm-sections-status');
+    const sectionStatusText = shadowRoot.querySelector('#uwm-sections-status-text');
+    const sectionProgress = shadowRoot.querySelector('#uwm-sections-progress');
     const enableNavigationToolColumn = shadowRoot.querySelector('#uwm-enable-navigation-tool-column');
     const enableNavigationValueColumn = shadowRoot.querySelector('#uwm-enable-navigation-value-column');
     const enableNavigationAnalyze = shadowRoot.querySelector('#uwm-enable-navigation-analyze');
@@ -1617,6 +1682,8 @@
 
     let pendingNavigationScope = null;
     let navigationReportRunning = false;
+    let pendingSectionScope = null;
+    let sectionReportRunning = false;
     let csvScope = null;
     let enableNavigationPlan = null;
     let enableNavigationRunning = false;
@@ -2062,6 +2129,8 @@
     function setAdminScopeLocked(isLocked) {
       adminContextInput.disabled = isLocked;
       publishedOnlyCheckbox.disabled = isLocked;
+      navigationReportTrigger.disabled = isLocked;
+      sectionReportTrigger.disabled = isLocked;
       csvFileInput.disabled = isLocked;
       csvCourseColumn.disabled = isLocked || !csvScope;
       csvCourseIdType.disabled = isLocked || !csvScope;
@@ -2274,7 +2343,8 @@
     }
 
     navigationReportTrigger.addEventListener('click', () => {
-      if (navigationReportRunning || pendingNavigationScope || enableNavigationRunning) return;
+      if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
+        pendingSectionScope || enableNavigationRunning) return;
 
       const accountId = adminContextInput.value.trim();
       if (!/^\d+$/.test(accountId)) {
@@ -2335,6 +2405,270 @@
       runNavigationLinksReport(pendingNavigationScope);
     });
 
+    function sectionClassNumber(sisSectionId) {
+      return String(sisSectionId ?? '').trim().match(/(\d{5})$/)?.[1] || '';
+    }
+
+    function sectionReportBaseRow(course, scope, generatedAt) {
+      const courseTerm = scope.termById.get(String(course.enrollment_term_id)) || {};
+      return {
+        'run.generated_at': generatedAt,
+        'scope.account_id': scope.accountId,
+        'scope.published': scope.publishedOnly,
+        'scope.enrollment_term_ids': scope.allTerms
+          ? 'all'
+          : scope.terms.map(term => term.id).join('|'),
+        'scope.enrollment_term_names': scope.termLabel,
+        'course.id': course.id ?? '',
+        'course.sis_course_id': course.sis_course_id ?? '',
+        'course.name': course.name ?? '',
+        'course.course_code': course.course_code ?? '',
+        'course.workflow_state': course.workflow_state ?? '',
+        'course.account_id': course.account_id ?? '',
+        'course.enrollment_term_id': course.enrollment_term_id ?? '',
+        'term.id': courseTerm.id ?? course.enrollment_term_id ?? '',
+        'term.sis_term_id': courseTerm.sis_term_id ?? '',
+        'term.name': courseTerm.name ?? course.term?.name ?? ''
+      };
+    }
+
+    function sectionReportRowsForCourse(course, sections, scope, generatedAt) {
+      const baseRow = sectionReportBaseRow(course, scope, generatedAt);
+      if (!sections.length) {
+        return [{
+          ...baseRow,
+          'match.class_number': '',
+          'match.class_number_count': '',
+          'run.status': 'no_sections',
+          'run.error': ''
+        }];
+      }
+
+      return sections.map(section => {
+        const classNumber = sectionClassNumber(section.sis_section_id);
+        return {
+          ...baseRow,
+          'match.class_number': classNumber,
+          'match.class_number_count': '',
+          'section.id': section.id ?? '',
+          'section.sis_section_id': section.sis_section_id ?? '',
+          'section.integration_id': section.integration_id ?? '',
+          'section.sis_import_id': section.sis_import_id ?? '',
+          'section.name': section.name ?? '',
+          'section.course_id': section.course_id ?? '',
+          'section.sis_course_id': section.sis_course_id ?? '',
+          'section.start_at': section.start_at ?? '',
+          'section.end_at': section.end_at ?? '',
+          'section.restrict_enrollments_to_section_dates':
+            section.restrict_enrollments_to_section_dates ?? '',
+          'section.nonxlist_course_id': section.nonxlist_course_id ?? '',
+          'run.status': classNumber ? 'matched' : 'missing_class_number',
+          'run.error': classNumber
+            ? ''
+            : 'The section SIS ID is missing or does not end in five digits.'
+        };
+      });
+    }
+
+    function showSectionStatus(message, { isError = false } = {}) {
+      sectionStatus.hidden = false;
+      sectionStatus.classList.toggle('is-error', isError);
+      sectionStatusText.textContent = message;
+    }
+
+    function resetSectionConfirmation() {
+      pendingSectionScope = null;
+      sectionConfirmation.hidden = true;
+      sectionContinue.disabled = false;
+      sectionCancel.disabled = false;
+      setAdminScopeLocked(false);
+    }
+
+    async function runSectionReport(scope) {
+      sectionReportRunning = true;
+      sectionConfirmation.hidden = true;
+      sectionStatus.classList.remove('is-error');
+      sectionStatus.hidden = false;
+      sectionProgress.removeAttribute('value');
+      sectionProgress.removeAttribute('max');
+
+      try {
+        sectionStatusText.textContent = 'Loading courses from Canvas…';
+        let loadedCourseCount = 0;
+        let loadedCoursePages = 0;
+        const termRequests = scope.allTerms ? [null] : scope.terms;
+        const courseLists = await Promise.all(termRequests.map(async term => {
+          const courseParams = new URLSearchParams({ per_page: '100' });
+          courseParams.append('include[]', 'term');
+          if (scope.publishedOnly) courseParams.set('published', 'true');
+          if (term) courseParams.set('enrollment_term_id', String(term.id));
+
+          return canvasApi.getAll(
+            `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${courseParams.toString()}`,
+            {
+              onPage: page => {
+                loadedCourseCount += page.pageItems;
+                loadedCoursePages++;
+                const rateText = page.rateRemaining === null
+                  ? ''
+                  : ` Canvas quota remaining: ${page.rateRemaining}.`;
+                sectionStatusText.textContent =
+                  `Loading courses: ${loadedCourseCount} found across ${loadedCoursePages} page(s).${rateText}`;
+              }
+            }
+          );
+        }));
+        const courses = Array.from(
+          new Map(courseLists.flat().map(course => [String(course.id), course])).values()
+        );
+
+        sectionProgress.max = Math.max(1, courses.length);
+        sectionProgress.value = 0;
+        let completedCourses = 0;
+        let sectionsFound = 0;
+        let failedCourses = 0;
+        const generatedAt = new Date().toISOString();
+        const rowsByCourse = new Array(courses.length);
+
+        await Promise.all(courses.map(async (course, index) => {
+          try {
+            const sections = await canvasApi.getAll(
+              `/api/v1/courses/${encodeURIComponent(String(course.id))}/sections?per_page=100`
+            );
+            sectionsFound += sections.length;
+            rowsByCourse[index] = sectionReportRowsForCourse(
+              course,
+              sections,
+              scope,
+              generatedAt
+            );
+          } catch (error) {
+            failedCourses++;
+            rowsByCourse[index] = [{
+              ...sectionReportBaseRow(course, scope, generatedAt),
+              'match.class_number': '',
+              'match.class_number_count': '',
+              'run.status': 'error',
+              'run.error': error.message
+            }];
+          } finally {
+            completedCourses++;
+            sectionProgress.value = completedCourses;
+            const apiState = canvasApi.state();
+            const rateText = apiState.rateRemaining === null
+              ? ''
+              : ` Canvas quota remaining: ${apiState.rateRemaining}.`;
+            sectionStatusText.textContent =
+              `Courses checked: ${completedCourses} of ${courses.length}. ` +
+              `Sections found: ${sectionsFound}. Errors: ${failedCourses}.${rateText}`;
+          }
+        }));
+
+        const rows = rowsByCourse.flat();
+        const classNumberCounts = new Map();
+        for (const row of rows) {
+          const classNumber = row['match.class_number'];
+          if (classNumber) {
+            classNumberCounts.set(classNumber, (classNumberCounts.get(classNumber) || 0) + 1);
+          }
+        }
+        for (const row of rows) {
+          const classNumber = row['match.class_number'];
+          if (!classNumber) continue;
+          const count = classNumberCounts.get(classNumber);
+          row['match.class_number_count'] = count;
+          if (count > 1 && row['run.status'] === 'matched') {
+            row['run.status'] = 'duplicate_class_number';
+          }
+        }
+
+        const publicationLabel = scope.publishedOnly ? 'pub' : 'unpub';
+        downloadCsv({
+          rows,
+          columns: SECTION_REPORT_COLUMNS,
+          filename: `sections.acct-${scope.accountId}.${publicationLabel}.${timestampForFilename()}.csv`
+        });
+
+        if (!courses.length) sectionProgress.value = 1;
+        const duplicateClassNumbers = Array.from(classNumberCounts.values())
+          .filter(count => count > 1).length;
+        showSectionStatus(
+          `Complete. ${courses.length} course(s), ${sectionsFound} section(s), ` +
+          `${duplicateClassNumbers} duplicated class number(s), ${failedCourses} course error(s). CSV downloaded.`,
+          { isError: failedCourses > 0 }
+        );
+      } catch (error) {
+        console.error('Canvas section report failed.', error);
+        sectionProgress.removeAttribute('value');
+        sectionProgress.removeAttribute('max');
+        showSectionStatus(`Report stopped: ${error.message}`, { isError: true });
+      } finally {
+        sectionReportRunning = false;
+        pendingSectionScope = null;
+        sectionContinue.disabled = false;
+        sectionCancel.disabled = false;
+        setAdminScopeLocked(false);
+      }
+    }
+
+    sectionReportTrigger.addEventListener('click', () => {
+      if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
+        pendingSectionScope || enableNavigationRunning) return;
+
+      const accountId = adminContextInput.value.trim();
+      if (!/^\d+$/.test(accountId)) {
+        adminContextInput.setCustomValidity('Enter a numeric Canvas account ID.');
+        adminContextInput.reportValidity();
+        adminContextInput.focus();
+        return;
+      }
+      if (termSelect.disabled || termsAccountId !== accountId) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Wait for the terms for this account to finish loading.';
+        return;
+      }
+
+      const termScope = selectedTermScope();
+      if (!termScope.allTerms && !termScope.terms.length) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Select at least one term scope before starting the report.';
+        termSelect.focus();
+        return;
+      }
+
+      pendingSectionScope = {
+        accountId,
+        publishedOnly: publishedOnlyCheckbox.checked,
+        allTerms: termScope.allTerms,
+        terms: termScope.terms,
+        termLabel: termScope.label,
+        termById: new Map(availableTerms.map(term => [String(term.id), term]))
+      };
+      const courseScopeText = pendingSectionScope.publishedOnly
+        ? 'all published courses'
+        : 'all non-deleted courses';
+      setAdminScopeLocked(true);
+      sectionStatus.hidden = true;
+      sectionConfirmationText.textContent =
+        `Collect sections for ${courseScopeText} in ${pendingSectionScope.termLabel} for account ` +
+        `${pendingSectionScope.accountId}? Canvas requires a separate section request for every course.`;
+      sectionConfirmation.hidden = false;
+      sectionContinue.focus();
+    });
+
+    sectionCancel.addEventListener('click', () => {
+      if (sectionReportRunning) return;
+      resetSectionConfirmation();
+      sectionReportTrigger.focus();
+    });
+
+    sectionContinue.addEventListener('click', () => {
+      if (!pendingSectionScope || sectionReportRunning) return;
+      sectionContinue.disabled = true;
+      sectionCancel.disabled = true;
+      runSectionReport(pendingSectionScope);
+    });
+
     function courseApiIdentifier(value, idType) {
       const identifier = String(value ?? '').trim();
       if (!identifier) throw new Error('Course ID is blank.');
@@ -2392,7 +2726,7 @@
     }
 
     async function analyzeEnableNavigation() {
-      if (enableNavigationRunning || navigationReportRunning || !csvScope) return;
+      if (enableNavigationRunning || navigationReportRunning || sectionReportRunning || !csvScope) return;
 
       const courseColumn = csvCourseColumn.value;
       const toolColumn = enableNavigationToolColumn.value;

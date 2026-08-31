@@ -50,6 +50,24 @@ filename because it can represent multiple selections. The selected scope remain
 `scope.enrollment_term_ids` and `scope.enrollment_term_names`, while each row identifies its course's
 term through `term.id`, `term.sis_term_id`, and `term.name`.
 
+### Sections and class numbers report
+
+Under **Admin → Courses**, **Get sections and class numbers** creates a read-only lookup report for
+every course in the selected account, publication, and term scope. Canvas does not permit sections to
+be included in the account-level course response, so the script loads the scoped courses first and
+then makes one paginated Sections API request per course through the shared scheduler.
+
+Each section retains the Canvas response fields under `section.*`, including `section.id`,
+`section.sis_section_id`, `section.sis_course_id`, and `section.nonxlist_course_id`. The script derives
+`match.class_number` from exactly the final five digits of `section.sis_section_id`. A missing SIS ID
+or one that does not end in five digits is marked `missing_class_number` rather than guessed.
+
+`match.class_number_count` records how many times that class number occurs in the complete report.
+Rows with a count greater than one are marked `duplicate_class_number`, which prevents multi-term or
+otherwise ambiguous matches from being treated as unique. The compact filename is
+`sections.acct-<account-id>.<pub|unpub>.<timestamp>.csv`; term scope remains in the CSV rather than the
+filename.
+
 ### CSV course scope
 
 The optional **CSV course scope** parses a local CSV in the browser; it does not send the file to a
