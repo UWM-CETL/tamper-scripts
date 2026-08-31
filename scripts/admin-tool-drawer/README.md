@@ -69,6 +69,11 @@ CSV generation is also shared. The utility accepts reusable column definitions, 
 SIS IDs as strings, adds an Excel-compatible UTF-8 marker, escapes values, and neutralizes cells that
 spreadsheet applications might otherwise interpret as formulas.
 
+CSV fields use short, dot-delimited namespaces. Fields copied from Canvas retain the exact JSON key
+after a source namespace, such as `course.id`, `course.sis_course_id`, `term.sis_term_id`, and
+`tab.visibility`. Script-created metadata uses `scope.*` and `run.*`. This convention is required for
+future reports so source fields remain recognizable and reusable without another mapping layer.
+
 ## Installation
 
 [Install this script](https://uwm-cetl.github.io/tamper-scripts/scripts/admin-tool-drawer/admin-tool-drawer.user.js)

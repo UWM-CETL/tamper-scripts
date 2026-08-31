@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.6.0
+// @version      0.7.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -546,31 +546,34 @@
   }
 
   const NAVIGATION_LINK_COLUMNS = [
-    { key: 'report_generated_at', label: 'report_generated_at' },
-    { key: 'scope_account_canvas_id', label: 'scope_account_canvas_id' },
-    { key: 'published_courses_only', label: 'published_courses_only' },
-    { key: 'scope_enrollment_term_canvas_ids', label: 'scope_enrollment_term_canvas_ids' },
-    { key: 'scope_enrollment_term_names', label: 'scope_enrollment_term_names' },
-    { key: 'course_canvas_id', label: 'course_canvas_id' },
-    { key: 'course_sis_id', label: 'course_sis_id' },
-    { key: 'course_name', label: 'course_name' },
-    { key: 'course_code', label: 'course_code' },
-    { key: 'course_workflow_state', label: 'course_workflow_state' },
-    { key: 'course_account_canvas_id', label: 'course_account_canvas_id' },
-    { key: 'course_enrollment_term_canvas_id', label: 'course_enrollment_term_canvas_id' },
-    { key: 'course_enrollment_term_sis_id', label: 'course_enrollment_term_sis_id' },
-    { key: 'course_enrollment_term_name', label: 'course_enrollment_term_name' },
-    { key: 'navigation_id', label: 'navigation_id' },
-    { key: 'navigation_label', label: 'navigation_label' },
-    { key: 'navigation_type', label: 'navigation_type' },
-    { key: 'navigation_position', label: 'navigation_position' },
-    { key: 'navigation_hidden', label: 'navigation_hidden' },
-    { key: 'navigation_visibility', label: 'navigation_visibility' },
-    { key: 'navigation_html_url', label: 'navigation_html_url' },
-    { key: 'navigation_full_url', label: 'navigation_full_url' },
-    { key: 'status', label: 'status' },
-    { key: 'error', label: 'error' }
-  ];
+    'run.generated_at',
+    'scope.account_id',
+    'scope.published',
+    'scope.enrollment_term_ids',
+    'scope.enrollment_term_names',
+    'course.id',
+    'course.sis_course_id',
+    'course.name',
+    'course.course_code',
+    'course.workflow_state',
+    'course.account_id',
+    'course.enrollment_term_id',
+    'term.id',
+    'term.sis_term_id',
+    'term.name',
+    'tab.id',
+    'tab.label',
+    'tab.type',
+    'tab.position',
+    'tab.hidden',
+    'tab.visibility',
+    'tab.html_url',
+    'tab.full_url',
+    'tab.url',
+    'tab.unused',
+    'run.status',
+    'run.error'
+  ].map(key => ({ key, label: key }));
 
   async function currentUserIsAccountAdmin() {
     const cachedStatus = readCachedAdminStatus();
@@ -1608,58 +1611,50 @@
       setAdminScopeLocked(false);
     }
 
-    function navigationUrl(tab) {
-      const value = tab.full_url || tab.html_url || '';
-      if (!value) return '';
-
-      try {
-        return new URL(value, window.location.origin).href;
-      } catch {
-        return value;
-      }
-    }
-
     function navigationRowsForCourse(course, tabs, scope, generatedAt) {
       const courseTerm = scope.termById.get(String(course.enrollment_term_id)) || {};
       const baseRow = {
-        report_generated_at: generatedAt,
-        scope_account_canvas_id: scope.accountId,
-        published_courses_only: scope.publishedOnly,
-        scope_enrollment_term_canvas_ids: scope.allTerms
+        'run.generated_at': generatedAt,
+        'scope.account_id': scope.accountId,
+        'scope.published': scope.publishedOnly,
+        'scope.enrollment_term_ids': scope.allTerms
           ? 'all'
           : scope.terms.map(term => term.id).join('|'),
-        scope_enrollment_term_names: scope.termLabel,
-        course_canvas_id: course.id ?? '',
-        course_sis_id: course.sis_course_id ?? '',
-        course_name: course.name ?? '',
-        course_code: course.course_code ?? '',
-        course_workflow_state: course.workflow_state ?? '',
-        course_account_canvas_id: course.account_id ?? '',
-        course_enrollment_term_canvas_id: course.enrollment_term_id ?? '',
-        course_enrollment_term_sis_id: courseTerm.sis_term_id ?? '',
-        course_enrollment_term_name: courseTerm.name ?? course.term?.name ?? ''
+        'scope.enrollment_term_names': scope.termLabel,
+        'course.id': course.id ?? '',
+        'course.sis_course_id': course.sis_course_id ?? '',
+        'course.name': course.name ?? '',
+        'course.course_code': course.course_code ?? '',
+        'course.workflow_state': course.workflow_state ?? '',
+        'course.account_id': course.account_id ?? '',
+        'course.enrollment_term_id': course.enrollment_term_id ?? '',
+        'term.id': courseTerm.id ?? course.enrollment_term_id ?? '',
+        'term.sis_term_id': courseTerm.sis_term_id ?? '',
+        'term.name': courseTerm.name ?? course.term?.name ?? ''
       };
 
       if (!tabs.length) {
         return [{
           ...baseRow,
-          status: 'no_navigation_tabs',
-          error: ''
+          'run.status': 'no_navigation_tabs',
+          'run.error': ''
         }];
       }
 
       return tabs.map(tab => ({
         ...baseRow,
-        navigation_id: tab.id ?? '',
-        navigation_label: tab.label ?? '',
-        navigation_type: tab.type ?? '',
-        navigation_position: tab.position ?? '',
-        navigation_hidden: Boolean(tab.hidden),
-        navigation_visibility: tab.visibility ?? '',
-        navigation_html_url: tab.html_url ?? '',
-        navigation_full_url: navigationUrl(tab),
-        status: 'ok',
-        error: ''
+        'tab.id': tab.id ?? '',
+        'tab.label': tab.label ?? '',
+        'tab.type': tab.type ?? '',
+        'tab.position': tab.position ?? '',
+        'tab.hidden': Boolean(tab.hidden),
+        'tab.visibility': tab.visibility ?? '',
+        'tab.html_url': tab.html_url ?? '',
+        'tab.full_url': tab.full_url ?? '',
+        'tab.url': tab.url ?? '',
+        'tab.unused': Boolean(tab.unused),
+        'run.status': 'ok',
+        'run.error': ''
       }));
     }
 
@@ -1727,26 +1722,27 @@
           } catch (error) {
             failedCourses++;
             rowsByCourse[index] = [{
-              report_generated_at: generatedAt,
-              scope_account_canvas_id: scope.accountId,
-              published_courses_only: scope.publishedOnly,
-              scope_enrollment_term_canvas_ids: scope.allTerms
+              'run.generated_at': generatedAt,
+              'scope.account_id': scope.accountId,
+              'scope.published': scope.publishedOnly,
+              'scope.enrollment_term_ids': scope.allTerms
                 ? 'all'
                 : scope.terms.map(term => term.id).join('|'),
-              scope_enrollment_term_names: scope.termLabel,
-              course_canvas_id: course.id ?? '',
-              course_sis_id: course.sis_course_id ?? '',
-              course_name: course.name ?? '',
-              course_code: course.course_code ?? '',
-              course_workflow_state: course.workflow_state ?? '',
-              course_account_canvas_id: course.account_id ?? '',
-              course_enrollment_term_canvas_id: course.enrollment_term_id ?? '',
-              course_enrollment_term_sis_id:
+              'scope.enrollment_term_names': scope.termLabel,
+              'course.id': course.id ?? '',
+              'course.sis_course_id': course.sis_course_id ?? '',
+              'course.name': course.name ?? '',
+              'course.course_code': course.course_code ?? '',
+              'course.workflow_state': course.workflow_state ?? '',
+              'course.account_id': course.account_id ?? '',
+              'course.enrollment_term_id': course.enrollment_term_id ?? '',
+              'term.id': scope.termById.get(String(course.enrollment_term_id))?.id ?? course.enrollment_term_id ?? '',
+              'term.sis_term_id':
                 scope.termById.get(String(course.enrollment_term_id))?.sis_term_id ?? '',
-              course_enrollment_term_name:
+              'term.name':
                 scope.termById.get(String(course.enrollment_term_id))?.name ?? course.term?.name ?? '',
-              status: 'error',
-              error: error.message
+              'run.status': 'error',
+              'run.error': error.message
             }];
           } finally {
             completedCourses++;
