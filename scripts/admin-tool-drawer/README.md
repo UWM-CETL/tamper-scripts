@@ -18,7 +18,9 @@ field remains editable so an admin can target a different account, course, or it
 
 The Admin context currently contains **Courses**, **People**, and **Sub-Accounts** sub-accordions.
 Its shared **Published courses only** scope is enabled by default and is applied to Admin reports that
-operate on courses. A grouped, multiple-selection **Terms** scope provides flexible meta-options for
+operate on courses unless an action explicitly states otherwise. The section matcher intentionally
+searches every non-deleted course in the selected terms. A grouped, multiple-selection **Terms**
+scope provides flexible meta-options for
 **All Current Terms** and **All Terms**, followed by the Canvas **Default Term** and individual
 **Current Terms**, **Future Terms**, **Past Terms**, and **Undated Terms**. All Current Terms is the
 safe default and can be combined with individual terms from the other groups. The selector excludes
@@ -52,34 +54,40 @@ term through `term.id`, `term.sis_term_id`, and `term.name`.
 
 ### Sections and class numbers report
 
-Under **Admin → Courses**, **Get sections and class numbers** creates a read-only lookup report for
-every course in the selected account, publication, and term scope. Canvas does not permit sections to
-be included in the account-level course response, so the script loads the scoped courses first and
-then makes one paginated Sections API request per course through the shared scheduler.
+Under **Admin → Courses**, **Get sections and class numbers** matches a selected column in the
+uploaded CSV against sections in the selected account and term scope. The global **Published courses
+only** setting does not apply: the matcher searches both published and unpublished non-deleted
+courses. Canvas does not permit sections to be included in the account-level course response, so the
+script loads the term-scoped courses first and then makes one paginated Sections API request per
+course through the shared scheduler.
 
 Each section retains the Canvas response fields under `section.*`, including `section.id`,
 `section.sis_section_id`, `section.sis_course_id`, and `section.nonxlist_course_id`. The script derives
-`match.class_number` from exactly the final five digits of `section.sis_section_id`. A missing SIS ID
-or one that does not end in five digits is marked `missing_class_number` rather than guessed.
+`match.class_number` from exactly the final five digits of `section.sis_section_id`. Uploaded class
+numbers must contain exactly five digits. Values remain strings throughout CSV processing so a
+leading zero present in the file is preserved.
 
-`match.class_number_count` records how many times that class number occurs in the complete report.
-Rows with a count greater than one are marked `duplicate_class_number`, which prevents multi-term or
-otherwise ambiguous matches from being treated as unique. The compact filename is
-`sections.acct-<account-id>.<pub|unpub>.<timestamp>.csv`; term scope remains in the CSV rather than the
-filename.
+The result preserves every input column. `match.class_number_count` records how many scoped Canvas
+sections matched that input row. A unique match is `matched`, no match is `no_match`, malformed input
+is `invalid_class_number`, and every candidate for an ambiguous value is emitted as a separate
+`multiple_matches` row. Course-level API failures are also included rather than silently making the
+lookup appear complete. The compact filename is
+`sec-match.acct-<account-id>.unpub.<timestamp>.csv`; term scope remains in the CSV rather than the
+filename, and `unpub` records that no published-only filter was applied.
 
-### CSV course scope
+### CSV input
 
-The optional **CSV course scope** parses a local CSV in the browser; it does not send the file to a
-separate service. After loading a file, select the column containing the course identifier and whether
-the values are Canvas course IDs or SIS course IDs. The parsed rows and that course mapping are shared
-by CSV-driven actions in the Courses accordion. Duplicate or blank headers are rejected so later
-field mappings remain unambiguous.
+The optional **CSV input** parses a local CSV in the browser; it does not send the file to a separate
+service. Uploading establishes only the reusable rows and headers. Every field selector and parameter
+mapping belongs to the action that consumes it and is displayed inside that action's accordion.
+Duplicate or blank headers are rejected so later field mappings remain unambiguous.
 
 ### Show or hide course navigation
 
-The **Show or hide course navigation** action requires two additional, action-specific mappings:
+The **Show or hide course navigation** action requires four action-specific mappings:
 
+* **Course ID column** identifies the destination course.
+* **Course ID type** says whether that column contains Canvas or SIS course IDs.
 * **Navigation tool ID column** contains Canvas tab IDs such as `context_external_tool_4`.
 * **New hidden value column** uses the canonical Canvas `hidden` values below. These are the only
   accepted values; matching is case-insensitive so Excel's `TRUE` and `FALSE` are valid.

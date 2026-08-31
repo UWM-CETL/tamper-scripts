@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.10.0
+// @version      0.11.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -653,6 +653,7 @@
   ].map(key => ({ key, label: key }));
 
   const SECTION_REPORT_COLUMNS = [
+    'input.row',
     'run.generated_at',
     'scope.account_id',
     'scope.published',
@@ -1463,22 +1464,9 @@
                   </div>
 
                   <div class="csv-scope">
-                    <p class="scope-section-title">CSV course scope</p>
+                    <p class="scope-section-title">CSV input</p>
                     <input class="csv-file" id="uwm-admin-csv-file" type="file" accept=".csv,text/csv">
-                    <div class="csv-mappings mapping-grid" id="uwm-admin-csv-mappings" hidden>
-                      <label class="field-label" for="uwm-admin-csv-course-column">
-                        Course ID column
-                        <select class="field-select" id="uwm-admin-csv-course-column"></select>
-                      </label>
-                      <label class="field-label" for="uwm-admin-csv-course-id-type">
-                        Course ID type
-                        <select class="field-select" id="uwm-admin-csv-course-id-type">
-                          <option value="canvas">Canvas course ID</option>
-                          <option value="sis">SIS course ID</option>
-                        </select>
-                      </label>
-                    </div>
-                    <p class="term-status" id="uwm-admin-csv-status">Optional. Upload a CSV to provide a reusable course scope for actions below.</p>
+                    <p class="term-status" id="uwm-admin-csv-status">Optional. Upload a reusable input file; each action will ask for the columns it needs.</p>
                   </div>
                 </div>
 
@@ -1520,8 +1508,13 @@
                             <span class="accordion-chevron" aria-hidden="true">›</span>
                           </button>
                           <div class="action-accordion-panel" id="uwm-section-report-panel" role="region" aria-labelledby="uwm-section-report-trigger" hidden>
-                            <button class="report-trigger" id="uwm-sections-report" type="button">Prepare section report</button>
-                            <p class="tool-description">Downloads sections for courses in the selected account and term scope. Each section SIS ID is paired with the five-digit class number at its end.</p>
+                            <p class="tool-description">Matches class numbers in the uploaded CSV to sections in the selected account and term scope. This search includes both published and unpublished courses; the Published courses only setting does not apply.</p>
+                            <label class="field-label" for="uwm-section-class-number-column">
+                              Class number column
+                              <select class="field-select" id="uwm-section-class-number-column" disabled></select>
+                            </label>
+                            <p class="tool-description">The value is matched to the final five digits of the Canvas section SIS ID. Input rows and columns are preserved in the result.</p>
+                            <button class="report-trigger" id="uwm-sections-report" type="button" disabled>Prepare section match</button>
 
                             <div class="confirmation" id="uwm-sections-confirmation" hidden>
                               <p id="uwm-sections-confirmation-text"></p>
@@ -1546,6 +1539,17 @@
                           <div class="action-accordion-panel" id="uwm-enable-navigation-panel" role="region" aria-labelledby="uwm-enable-navigation-trigger" hidden>
                             <p class="tool-description">Uses the uploaded CSV to show or hide a selected navigation tab in each listed course. Analysis is read-only until you confirm the change plan.</p>
                             <div class="mapping-grid">
+                              <label class="field-label" for="uwm-admin-csv-course-column">
+                                Course ID column
+                                <select class="field-select" id="uwm-admin-csv-course-column" disabled></select>
+                              </label>
+                              <label class="field-label" for="uwm-admin-csv-course-id-type">
+                                Course ID type
+                                <select class="field-select" id="uwm-admin-csv-course-id-type" disabled>
+                                  <option value="canvas">Canvas course ID</option>
+                                  <option value="sis">SIS course ID</option>
+                                </select>
+                              </label>
                               <label class="field-label" for="uwm-enable-navigation-tool-column">
                                 Navigation tool ID column
                                 <select class="field-select" id="uwm-enable-navigation-tool-column" disabled></select>
@@ -1647,7 +1651,6 @@
     const termSelect = shadowRoot.querySelector('#uwm-admin-term-scope');
     const termStatus = shadowRoot.querySelector('#uwm-admin-term-status');
     const csvFileInput = shadowRoot.querySelector('#uwm-admin-csv-file');
-    const csvMappings = shadowRoot.querySelector('#uwm-admin-csv-mappings');
     const csvCourseColumn = shadowRoot.querySelector('#uwm-admin-csv-course-column');
     const csvCourseIdType = shadowRoot.querySelector('#uwm-admin-csv-course-id-type');
     const csvStatus = shadowRoot.querySelector('#uwm-admin-csv-status');
@@ -1667,6 +1670,7 @@
     const sectionStatus = shadowRoot.querySelector('#uwm-sections-status');
     const sectionStatusText = shadowRoot.querySelector('#uwm-sections-status-text');
     const sectionProgress = shadowRoot.querySelector('#uwm-sections-progress');
+    const sectionClassNumberColumn = shadowRoot.querySelector('#uwm-section-class-number-column');
     const enableNavigationToolColumn = shadowRoot.querySelector('#uwm-enable-navigation-tool-column');
     const enableNavigationValueColumn = shadowRoot.querySelector('#uwm-enable-navigation-value-column');
     const enableNavigationAnalyze = shadowRoot.querySelector('#uwm-enable-navigation-analyze');
@@ -1684,6 +1688,7 @@
     let navigationReportRunning = false;
     let pendingSectionScope = null;
     let sectionReportRunning = false;
+    let adminScopeLocked = false;
     let csvScope = null;
     let enableNavigationPlan = null;
     let enableNavigationRunning = false;
@@ -1951,14 +1956,24 @@
       enableNavigationCancel.disabled = false;
     }
 
+    function resetSectionReport() {
+      pendingSectionScope = null;
+      sectionConfirmation.hidden = true;
+      sectionStatus.hidden = true;
+      sectionContinue.disabled = false;
+      sectionCancel.disabled = false;
+    }
+
     function refreshCsvActionAvailability() {
       const hasCsv = Boolean(csvScope?.rows.length);
-      csvMappings.hidden = !hasCsv;
-      csvCourseColumn.disabled = !hasCsv;
-      csvCourseIdType.disabled = !hasCsv;
-      enableNavigationToolColumn.disabled = !hasCsv;
-      enableNavigationValueColumn.disabled = !hasCsv;
-      enableNavigationAnalyze.disabled = !hasCsv ||
+      csvCourseColumn.disabled = adminScopeLocked || !hasCsv;
+      csvCourseIdType.disabled = adminScopeLocked || !hasCsv;
+      sectionClassNumberColumn.disabled = adminScopeLocked || !hasCsv;
+      sectionReportTrigger.disabled = adminScopeLocked || !hasCsv ||
+        !sectionClassNumberColumn.value || sectionReportRunning;
+      enableNavigationToolColumn.disabled = adminScopeLocked || !hasCsv;
+      enableNavigationValueColumn.disabled = adminScopeLocked || !hasCsv;
+      enableNavigationAnalyze.disabled = adminScopeLocked || !hasCsv ||
         !csvCourseColumn.value ||
         !enableNavigationToolColumn.value ||
         !enableNavigationValueColumn.value ||
@@ -1967,12 +1982,12 @@
 
     async function loadCsvScope(file) {
       resetEnableNavigationAnalysis();
+      resetSectionReport();
       csvScope = null;
 
       if (!file) {
-        csvMappings.hidden = true;
         csvStatus.classList.remove('is-error');
-        csvStatus.textContent = 'Optional. Upload a CSV to provide a reusable course scope for actions below.';
+        csvStatus.textContent = 'Optional. Upload a reusable input file; each action will ask for the columns it needs.';
         refreshCsvActionAvailability();
         return;
       }
@@ -2001,6 +2016,11 @@
           csvCourseColumn,
           parsed.headers,
           ['course.id', 'course.sis_course_id', 'id', 'sis_course_id']
+        );
+        populateColumnSelect(
+          sectionClassNumberColumn,
+          parsed.headers,
+          ['Class #', 'class_number', 'match.class_number', 'class number']
         );
         populateColumnSelect(
           enableNavigationToolColumn,
@@ -2097,6 +2117,7 @@
     for (const select of [
       csvCourseColumn,
       csvCourseIdType,
+      sectionClassNumberColumn,
       enableNavigationToolColumn,
       enableNavigationValueColumn
     ]) {
@@ -2104,7 +2125,8 @@
         if (select === csvCourseColumn) {
           csvCourseIdType.value = /sis_course_id/i.test(csvCourseColumn.value) ? 'sis' : 'canvas';
         }
-        resetEnableNavigationAnalysis();
+        if (select === sectionClassNumberColumn) resetSectionReport();
+        else resetEnableNavigationAnalysis();
         refreshCsvActionAvailability();
       });
     }
@@ -2127,22 +2149,15 @@
     scheduleTermsLoad();
 
     function setAdminScopeLocked(isLocked) {
+      adminScopeLocked = isLocked;
       adminContextInput.disabled = isLocked;
       publishedOnlyCheckbox.disabled = isLocked;
       navigationReportTrigger.disabled = isLocked;
-      sectionReportTrigger.disabled = isLocked;
       csvFileInput.disabled = isLocked;
-      csvCourseColumn.disabled = isLocked || !csvScope;
-      csvCourseIdType.disabled = isLocked || !csvScope;
-      enableNavigationToolColumn.disabled = isLocked || !csvScope;
-      enableNavigationValueColumn.disabled = isLocked || !csvScope;
-      enableNavigationAnalyze.disabled = isLocked || !csvScope ||
-        !csvCourseColumn.value ||
-        !enableNavigationToolColumn.value ||
-        !enableNavigationValueColumn.value;
       termSelect.disabled = isLocked ||
         termsAccountId !== adminContextInput.value.trim() ||
         !availableTerms.length;
+      refreshCsvActionAvailability();
     }
 
     function showNavigationStatus(message, { isError = false } = {}) {
@@ -2409,6 +2424,11 @@
       return String(sisSectionId ?? '').trim().match(/(\d{5})$/)?.[1] || '';
     }
 
+    function normalizeInputClassNumber(value) {
+      const normalized = String(value ?? '').trim();
+      return /^\d{5}$/.test(normalized) ? normalized : '';
+    }
+
     function sectionReportBaseRow(course, scope, generatedAt) {
       const courseTerm = scope.termById.get(String(course.enrollment_term_id)) || {};
       return {
@@ -2500,7 +2520,6 @@
         const courseLists = await Promise.all(termRequests.map(async term => {
           const courseParams = new URLSearchParams({ per_page: '100' });
           courseParams.append('include[]', 'term');
-          if (scope.publishedOnly) courseParams.set('published', 'true');
           if (term) courseParams.set('enrollment_term_id', String(term.id));
 
           return canvasApi.getAll(
@@ -2564,37 +2583,103 @@
           }
         }));
 
-        const rows = rowsByCourse.flat();
-        const classNumberCounts = new Map();
-        for (const row of rows) {
-          const classNumber = row['match.class_number'];
-          if (classNumber) {
-            classNumberCounts.set(classNumber, (classNumberCounts.get(classNumber) || 0) + 1);
+        const sectionRows = rowsByCourse.flat();
+        const sectionsByClassNumber = new Map();
+        const courseErrorRows = [];
+        for (const row of sectionRows) {
+          if (row['run.status'] === 'error') {
+            courseErrorRows.push(row);
+            continue;
           }
-        }
-        for (const row of rows) {
           const classNumber = row['match.class_number'];
           if (!classNumber) continue;
-          const count = classNumberCounts.get(classNumber);
-          row['match.class_number_count'] = count;
-          if (count > 1 && row['run.status'] === 'matched') {
-            row['run.status'] = 'duplicate_class_number';
+          const matches = sectionsByClassNumber.get(classNumber) || [];
+          matches.push(row);
+          sectionsByClassNumber.set(classNumber, matches);
+        }
+
+        let matchedInputRows = 0;
+        let unmatchedInputRows = 0;
+        let ambiguousInputRows = 0;
+        let invalidInputRows = 0;
+        const rows = [];
+        for (const inputRow of scope.inputRows) {
+          const rawClassNumber = inputRow[scope.classNumberColumn];
+          const classNumber = normalizeInputClassNumber(rawClassNumber);
+          if (!classNumber) {
+            invalidInputRows++;
+            rows.push({
+              ...inputRow,
+              'run.generated_at': generatedAt,
+              'scope.account_id': scope.accountId,
+              'scope.published': false,
+              'scope.enrollment_term_ids': scope.allTerms
+                ? 'all'
+                : scope.terms.map(term => term.id).join('|'),
+              'scope.enrollment_term_names': scope.termLabel,
+              'match.class_number': '',
+              'match.class_number_count': 0,
+              'run.status': 'invalid_class_number',
+              'run.error': `Expected exactly five digits; received: ${rawClassNumber ?? ''}`
+            });
+            continue;
+          }
+
+          const matches = sectionsByClassNumber.get(classNumber) || [];
+          if (!matches.length) {
+            unmatchedInputRows++;
+            rows.push({
+              ...inputRow,
+              'run.generated_at': generatedAt,
+              'scope.account_id': scope.accountId,
+              'scope.published': false,
+              'scope.enrollment_term_ids': scope.allTerms
+                ? 'all'
+                : scope.terms.map(term => term.id).join('|'),
+              'scope.enrollment_term_names': scope.termLabel,
+              'match.class_number': classNumber,
+              'match.class_number_count': 0,
+              'run.status': 'no_match',
+              'run.error': ''
+            });
+            continue;
+          }
+
+          if (matches.length > 1) ambiguousInputRows++;
+          else matchedInputRows++;
+          for (const match of matches) {
+            rows.push({
+              ...inputRow,
+              ...match,
+              'match.class_number_count': matches.length,
+              'run.status': matches.length > 1 ? 'multiple_matches' : 'matched',
+              'run.error': ''
+            });
           }
         }
 
-        const publicationLabel = scope.publishedOnly ? 'pub' : 'unpub';
+        for (const errorRow of courseErrorRows) {
+          rows.push({
+            ...errorRow,
+            'run.status': 'course_error'
+          });
+        }
+
+        const outputColumnNames = [...scope.sourceHeaders];
+        for (const column of SECTION_REPORT_COLUMNS) {
+          if (!outputColumnNames.includes(column.key)) outputColumnNames.push(column.key);
+        }
         downloadCsv({
           rows,
-          columns: SECTION_REPORT_COLUMNS,
-          filename: `sections.acct-${scope.accountId}.${publicationLabel}.${timestampForFilename()}.csv`
+          columns: outputColumnNames.map(key => ({ key, label: key })),
+          filename: `sec-match.acct-${scope.accountId}.unpub.${timestampForFilename()}.csv`
         });
 
         if (!courses.length) sectionProgress.value = 1;
-        const duplicateClassNumbers = Array.from(classNumberCounts.values())
-          .filter(count => count > 1).length;
         showSectionStatus(
-          `Complete. ${courses.length} course(s), ${sectionsFound} section(s), ` +
-          `${duplicateClassNumbers} duplicated class number(s), ${failedCourses} course error(s). CSV downloaded.`,
+          `Complete. ${scope.inputRows.length} input row(s): ${matchedInputRows} matched, ` +
+          `${ambiguousInputRows} with multiple matches, ${unmatchedInputRows} unmatched, ` +
+          `${invalidInputRows} invalid. ${failedCourses} course error(s). CSV downloaded.`,
           { isError: failedCourses > 0 }
         );
       } catch (error) {
@@ -2613,7 +2698,16 @@
 
     sectionReportTrigger.addEventListener('click', () => {
       if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
-        pendingSectionScope || enableNavigationRunning) return;
+        pendingSectionScope || enableNavigationRunning || !csvScope) return;
+
+      const classNumberColumn = sectionClassNumberColumn.value;
+      if (!classNumberColumn) {
+        showSectionStatus('Choose the CSV class number column before preparing the match.', {
+          isError: true
+        });
+        sectionClassNumberColumn.focus();
+        return;
+      }
 
       const accountId = adminContextInput.value.trim();
       if (!/^\d+$/.test(accountId)) {
@@ -2638,20 +2732,22 @@
 
       pendingSectionScope = {
         accountId,
-        publishedOnly: publishedOnlyCheckbox.checked,
+        publishedOnly: false,
         allTerms: termScope.allTerms,
         terms: termScope.terms,
         termLabel: termScope.label,
-        termById: new Map(availableTerms.map(term => [String(term.id), term]))
+        termById: new Map(availableTerms.map(term => [String(term.id), term])),
+        sourceFileName: csvScope.fileName,
+        sourceHeaders: [...csvScope.headers],
+        inputRows: csvScope.rows.map(row => ({ ...row })),
+        classNumberColumn
       };
-      const courseScopeText = pendingSectionScope.publishedOnly
-        ? 'all published courses'
-        : 'all non-deleted courses';
       setAdminScopeLocked(true);
       sectionStatus.hidden = true;
       sectionConfirmationText.textContent =
-        `Collect sections for ${courseScopeText} in ${pendingSectionScope.termLabel} for account ` +
-        `${pendingSectionScope.accountId}? Canvas requires a separate section request for every course.`;
+        `Match ${pendingSectionScope.inputRows.length} CSV row(s) against sections in all non-deleted ` +
+        `courses in ${pendingSectionScope.termLabel} for account ${pendingSectionScope.accountId}? ` +
+        `The published-only setting is ignored. Canvas requires a separate section request for every course.`;
       sectionConfirmation.hidden = false;
       sectionContinue.focus();
     });
