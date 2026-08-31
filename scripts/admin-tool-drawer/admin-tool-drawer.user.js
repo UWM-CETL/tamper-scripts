@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.7.0
+// @version      0.8.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -545,6 +545,87 @@
     }, 1000);
   }
 
+  function parseCsvText(text) {
+    const matrix = [];
+    let row = [];
+    let cell = '';
+    let inQuotes = false;
+
+    for (let index = 0; index < text.length; index++) {
+      const character = text[index];
+
+      if (inQuotes) {
+        if (character === '"') {
+          if (text[index + 1] === '"') {
+            cell += '"';
+            index++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          cell += character;
+        }
+        continue;
+      }
+
+      if (character === '"' && cell === '') {
+        inQuotes = true;
+      } else if (character === ',') {
+        row.push(cell);
+        cell = '';
+      } else if (character === '\n' || character === '\r') {
+        if (character === '\r' && text[index + 1] === '\n') index++;
+        row.push(cell);
+        matrix.push(row);
+        row = [];
+        cell = '';
+      } else {
+        cell += character;
+      }
+    }
+
+    if (inQuotes) throw new Error('The CSV ends inside a quoted field.');
+    if (cell !== '' || row.length) {
+      row.push(cell);
+      matrix.push(row);
+    }
+    if (!matrix.length) throw new Error('The CSV is empty.');
+
+    const headers = matrix.shift().map((header, index) => (
+      index === 0 ? header.replace(/^\uFEFF/, '') : header
+    ));
+    if (headers.some(header => !header.trim())) {
+      throw new Error('Every CSV column must have a header.');
+    }
+    const duplicateHeaders = headers.filter((header, index) => headers.indexOf(header) !== index);
+    if (duplicateHeaders.length) {
+      throw new Error(`Duplicate CSV header: ${duplicateHeaders[0]}`);
+    }
+
+    const rows = matrix
+      .filter(values => values.some(value => value !== ''))
+      .map((values, index) => {
+        const record = { 'input.row': index + 2 };
+        for (let columnIndex = 0; columnIndex < headers.length; columnIndex++) {
+          record[headers[columnIndex]] = values[columnIndex] ?? '';
+        }
+        return record;
+      });
+
+    return { headers, rows };
+  }
+
+  function parseCanvasBoolean(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (['false', '0', 'no', 'n', 'off', 'show', 'shown', 'visible', 'enable', 'enabled'].includes(normalized)) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'y', 'on', 'hide', 'hidden', 'disable', 'disabled'].includes(normalized)) {
+      return true;
+    }
+    return null;
+  }
+
   const NAVIGATION_LINK_COLUMNS = [
     'run.generated_at',
     'scope.account_id',
@@ -651,8 +732,11 @@
         .subaccordion-trigger:focus-visible,
         .context-id:focus-visible,
         .term-select:focus-visible,
+        .field-select:focus-visible,
+        .csv-file:focus-visible,
         .scope-checkbox:focus-visible,
         .report-trigger:focus-visible,
+        .action-accordion-trigger:focus-visible,
         .confirmation-button:focus-visible {
           outline: 3px solid var(--uwm-warning);
           outline-offset: 3px;
@@ -942,6 +1026,80 @@
           color: #ffd8dc;
         }
 
+        .csv-scope {
+          border-top: 1px solid rgb(244 185 66 / 25%);
+          margin-top: 13px;
+          padding-top: 13px;
+        }
+
+        .scope-section-title {
+          color: var(--uwm-text);
+          font-size: 0.82rem;
+          font-weight: 800;
+          margin: 0 0 8px;
+        }
+
+        .csv-file {
+          color: var(--uwm-muted);
+          display: block;
+          font: inherit;
+          font-size: 0.78rem;
+          max-width: 100%;
+          width: 100%;
+        }
+
+        .csv-file::file-selector-button {
+          background: transparent;
+          border: 1px solid rgb(255 247 237 / 45%);
+          border-radius: 7px;
+          color: var(--uwm-text);
+          cursor: pointer;
+          font: inherit;
+          font-weight: 800;
+          margin-right: 8px;
+          padding: 7px 9px;
+        }
+
+        .mapping-grid {
+          display: grid;
+          gap: 10px;
+          margin-top: 11px;
+        }
+
+        .field-select {
+          background: #fffaf4;
+          border: 2px solid transparent;
+          border-radius: 7px;
+          color: #2a1012;
+          font: inherit;
+          font-size: 0.82rem;
+          padding: 8px 9px;
+          width: 100%;
+        }
+
+        .field-select:hover:not(:disabled) {
+          border-color: rgb(244 185 66 / 70%);
+        }
+
+        .field-select:disabled {
+          cursor: not-allowed;
+          opacity: 0.65;
+        }
+
+        .field-label {
+          color: var(--uwm-text);
+          display: grid;
+          font-size: 0.78rem;
+          font-weight: 700;
+          gap: 5px;
+        }
+
+        .csv-mappings[hidden],
+        .action-accordion-panel[hidden],
+        .analysis-summary[hidden] {
+          display: none;
+        }
+
         .subaccordions {
           display: grid;
           gap: 8px;
@@ -1025,6 +1183,90 @@
           font-size: 0.78rem;
           line-height: 1.45;
           margin: 7px 0 0;
+        }
+
+        .action-accordions {
+          display: grid;
+          gap: 8px;
+        }
+
+        .action-accordion-item {
+          border: 1px solid rgb(255 247 237 / 17%);
+          border-radius: 7px;
+          overflow: hidden;
+        }
+
+        .action-accordion-item.is-active {
+          border-color: rgb(244 185 66 / 38%);
+        }
+
+        .action-accordion-trigger {
+          align-items: center;
+          background: rgb(255 255 255 / 3%);
+          border: 0;
+          color: var(--uwm-text);
+          cursor: pointer;
+          display: flex;
+          font: inherit;
+          font-size: 0.83rem;
+          font-weight: 800;
+          justify-content: space-between;
+          padding: 11px 12px;
+          text-align: left;
+          width: 100%;
+        }
+
+        .action-accordion-trigger:hover {
+          background: rgb(255 255 255 / 7%);
+        }
+
+        .action-accordion-trigger[aria-expanded="true"] .accordion-chevron {
+          transform: rotate(90deg);
+        }
+
+        .action-accordion-panel {
+          background: rgb(0 0 0 / 12%);
+          border-top: 1px solid rgb(255 247 237 / 12%);
+          padding: 12px;
+        }
+
+        .action-button {
+          background: var(--uwm-warning);
+          border: 1px solid var(--uwm-warning);
+          border-radius: 7px;
+          color: #2a1012;
+          cursor: pointer;
+          font: inherit;
+          font-size: 0.8rem;
+          font-weight: 800;
+          margin-top: 11px;
+          padding: 8px 11px;
+        }
+
+        .action-button.secondary {
+          background: transparent;
+          border-color: rgb(255 247 237 / 45%);
+          color: var(--uwm-text);
+        }
+
+        .action-button:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+
+        .analysis-summary {
+          background: rgb(244 185 66 / 8%);
+          border: 1px solid rgb(244 185 66 / 28%);
+          border-radius: 7px;
+          margin-top: 11px;
+          padding: 10px;
+        }
+
+        .analysis-summary p {
+          color: var(--uwm-muted);
+          font-size: 0.78rem;
+          line-height: 1.45;
+          margin: 0;
         }
 
         .confirmation,
@@ -1190,6 +1432,25 @@
                     </select>
                     <p class="term-status" id="uwm-admin-term-status">Current terms are selected automatically. Hold Ctrl or Command to select more than one.</p>
                   </div>
+
+                  <div class="csv-scope">
+                    <p class="scope-section-title">CSV course scope</p>
+                    <input class="csv-file" id="uwm-admin-csv-file" type="file" accept=".csv,text/csv">
+                    <div class="csv-mappings mapping-grid" id="uwm-admin-csv-mappings" hidden>
+                      <label class="field-label" for="uwm-admin-csv-course-column">
+                        Course ID column
+                        <select class="field-select" id="uwm-admin-csv-course-column"></select>
+                      </label>
+                      <label class="field-label" for="uwm-admin-csv-course-id-type">
+                        Course ID type
+                        <select class="field-select" id="uwm-admin-csv-course-id-type">
+                          <option value="canvas">Canvas course ID</option>
+                          <option value="sis">SIS course ID</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p class="term-status" id="uwm-admin-csv-status">Optional. Upload a CSV to provide a reusable course scope for actions below.</p>
+                  </div>
                 </div>
 
                 <div class="subaccordions" aria-label="Admin tool categories">
@@ -1199,20 +1460,69 @@
                       <span class="accordion-chevron" aria-hidden="true">›</span>
                     </button>
                     <div class="subaccordion-panel" id="uwm-admin-courses-panel" role="region" aria-labelledby="uwm-admin-courses-trigger" hidden>
-                      <button class="report-trigger" id="uwm-navigation-links-report" type="button">Get all navigation links</button>
-                      <p class="tool-description">Downloads one CSV row for every navigation tab in every course within the selected account scope.</p>
+                      <div class="action-accordions" aria-label="Course actions">
+                        <section class="action-accordion-item" data-course-action="navigation-report">
+                          <button class="action-accordion-trigger" type="button" id="uwm-navigation-report-trigger" aria-expanded="false" aria-controls="uwm-navigation-report-panel">
+                            <span>Get all navigation links</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-navigation-report-panel" role="region" aria-labelledby="uwm-navigation-report-trigger" hidden>
+                            <button class="report-trigger" id="uwm-navigation-links-report" type="button">Prepare navigation report</button>
+                            <p class="tool-description">Downloads one CSV row for every navigation tab in every course within the selected account scope.</p>
 
-                      <div class="confirmation" id="uwm-navigation-links-confirmation" hidden>
-                        <p id="uwm-navigation-links-confirmation-text"></p>
-                        <div class="confirmation-actions">
-                          <button class="confirmation-button primary" id="uwm-navigation-links-continue" type="button">Continue</button>
-                          <button class="confirmation-button" id="uwm-navigation-links-cancel" type="button">Cancel</button>
-                        </div>
-                      </div>
+                            <div class="confirmation" id="uwm-navigation-links-confirmation" hidden>
+                              <p id="uwm-navigation-links-confirmation-text"></p>
+                              <div class="confirmation-actions">
+                                <button class="confirmation-button primary" id="uwm-navigation-links-continue" type="button">Continue</button>
+                                <button class="confirmation-button" id="uwm-navigation-links-cancel" type="button">Cancel</button>
+                              </div>
+                            </div>
 
-                      <div class="run-status" id="uwm-navigation-links-status" role="status" aria-live="polite" hidden>
-                        <progress class="run-progress" id="uwm-navigation-links-progress"></progress>
-                        <p id="uwm-navigation-links-status-text"></p>
+                            <div class="run-status" id="uwm-navigation-links-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-navigation-links-progress"></progress>
+                              <p id="uwm-navigation-links-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
+
+                        <section class="action-accordion-item" data-course-action="enable-navigation">
+                          <button class="action-accordion-trigger" type="button" id="uwm-enable-navigation-trigger" aria-expanded="false" aria-controls="uwm-enable-navigation-panel">
+                            <span>Enable in course navigation</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-enable-navigation-panel" role="region" aria-labelledby="uwm-enable-navigation-trigger" hidden>
+                            <p class="tool-description">Uses the uploaded CSV to enable a selected navigation tab in each listed course. Analysis is read-only until you confirm the change plan.</p>
+                            <div class="mapping-grid">
+                              <label class="field-label" for="uwm-enable-navigation-tool-column">
+                                Navigation tool ID column
+                                <select class="field-select" id="uwm-enable-navigation-tool-column" disabled></select>
+                              </label>
+                              <label class="field-label" for="uwm-enable-navigation-value-column">
+                                New hidden value column
+                                <select class="field-select" id="uwm-enable-navigation-value-column" disabled></select>
+                              </label>
+                            </div>
+                            <p class="tool-description">The tool column should contain a Canvas tab ID such as <code>context_external_tool_4</code>. The new value must mean false, visible, shown, or enabled.</p>
+                            <button class="action-button" id="uwm-enable-navigation-analyze" type="button" disabled>Analyze CSV</button>
+
+                            <div class="analysis-summary" id="uwm-enable-navigation-analysis" hidden>
+                              <p id="uwm-enable-navigation-analysis-text"></p>
+                            </div>
+
+                            <div class="confirmation" id="uwm-enable-navigation-confirmation" hidden>
+                              <p id="uwm-enable-navigation-confirmation-text"></p>
+                              <div class="confirmation-actions">
+                                <button class="confirmation-button primary" id="uwm-enable-navigation-continue" type="button">Enable navigation</button>
+                                <button class="confirmation-button" id="uwm-enable-navigation-cancel" type="button">Cancel</button>
+                              </div>
+                            </div>
+
+                            <div class="run-status" id="uwm-enable-navigation-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-enable-navigation-progress"></progress>
+                              <p id="uwm-enable-navigation-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
                       </div>
                     </div>
                   </section>
@@ -1278,10 +1588,16 @@
     const accordionItems = Array.from(shadowRoot.querySelectorAll('.accordion-item'));
     const contextInputs = Array.from(shadowRoot.querySelectorAll('.context-id'));
     const subaccordionItems = Array.from(shadowRoot.querySelectorAll('.subaccordion-item'));
+    const courseActionItems = Array.from(shadowRoot.querySelectorAll('.action-accordion-item'));
     const adminContextInput = shadowRoot.querySelector('#uwm-admin-context-id');
     const publishedOnlyCheckbox = shadowRoot.querySelector('#uwm-admin-published-only');
     const termSelect = shadowRoot.querySelector('#uwm-admin-term-scope');
     const termStatus = shadowRoot.querySelector('#uwm-admin-term-status');
+    const csvFileInput = shadowRoot.querySelector('#uwm-admin-csv-file');
+    const csvMappings = shadowRoot.querySelector('#uwm-admin-csv-mappings');
+    const csvCourseColumn = shadowRoot.querySelector('#uwm-admin-csv-course-column');
+    const csvCourseIdType = shadowRoot.querySelector('#uwm-admin-csv-course-id-type');
+    const csvStatus = shadowRoot.querySelector('#uwm-admin-csv-status');
     const navigationReportTrigger = shadowRoot.querySelector('#uwm-navigation-links-report');
     const navigationConfirmation = shadowRoot.querySelector('#uwm-navigation-links-confirmation');
     const navigationConfirmationText = shadowRoot.querySelector('#uwm-navigation-links-confirmation-text');
@@ -1290,9 +1606,24 @@
     const navigationStatus = shadowRoot.querySelector('#uwm-navigation-links-status');
     const navigationStatusText = shadowRoot.querySelector('#uwm-navigation-links-status-text');
     const navigationProgress = shadowRoot.querySelector('#uwm-navigation-links-progress');
+    const enableNavigationToolColumn = shadowRoot.querySelector('#uwm-enable-navigation-tool-column');
+    const enableNavigationValueColumn = shadowRoot.querySelector('#uwm-enable-navigation-value-column');
+    const enableNavigationAnalyze = shadowRoot.querySelector('#uwm-enable-navigation-analyze');
+    const enableNavigationAnalysis = shadowRoot.querySelector('#uwm-enable-navigation-analysis');
+    const enableNavigationAnalysisText = shadowRoot.querySelector('#uwm-enable-navigation-analysis-text');
+    const enableNavigationConfirmation = shadowRoot.querySelector('#uwm-enable-navigation-confirmation');
+    const enableNavigationConfirmationText = shadowRoot.querySelector('#uwm-enable-navigation-confirmation-text');
+    const enableNavigationContinue = shadowRoot.querySelector('#uwm-enable-navigation-continue');
+    const enableNavigationCancel = shadowRoot.querySelector('#uwm-enable-navigation-cancel');
+    const enableNavigationStatus = shadowRoot.querySelector('#uwm-enable-navigation-status');
+    const enableNavigationProgress = shadowRoot.querySelector('#uwm-enable-navigation-progress');
+    const enableNavigationStatusText = shadowRoot.querySelector('#uwm-enable-navigation-status-text');
 
     let pendingNavigationScope = null;
     let navigationReportRunning = false;
+    let csvScope = null;
+    let enableNavigationPlan = null;
+    let enableNavigationRunning = false;
     let availableTerms = [];
     let termsAccountId = '';
     let termsLoadSequence = 0;
@@ -1367,14 +1698,10 @@
 
     function sortTermsForGroup(groupName, terms) {
       return [...terms].sort((left, right) => {
-        if (groupName === 'future') {
-          return (termTime(left, 'start_at') ?? Infinity) - (termTime(right, 'start_at') ?? Infinity);
-        }
-        if (groupName === 'past') {
-          return (termTime(right, 'end_at') ?? -Infinity) - (termTime(left, 'end_at') ?? -Infinity);
-        }
-        if (groupName === 'current') {
-          return (termTime(right, 'start_at') ?? -Infinity) - (termTime(left, 'start_at') ?? -Infinity);
+        if (['current', 'future', 'past'].includes(groupName)) {
+          const leftDate = termTime(left, 'start_at') ?? termTime(left, 'end_at') ?? Infinity;
+          const rightDate = termTime(right, 'start_at') ?? termTime(right, 'end_at') ?? Infinity;
+          return leftDate - rightDate || String(left.name || '').localeCompare(String(right.name || ''));
         }
         return String(left.name || '').localeCompare(String(right.name || ''));
       });
@@ -1526,6 +1853,120 @@
       };
     }
 
+    function preferredColumn(headers, candidates) {
+      for (const candidate of candidates) {
+        const exact = headers.find(header => header.toLowerCase() === candidate.toLowerCase());
+        if (exact) return exact;
+      }
+      return '';
+    }
+
+    function populateColumnSelect(select, headers, preferred = []) {
+      select.replaceChildren();
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Choose a CSV column';
+      select.appendChild(placeholder);
+
+      for (const header of headers) {
+        const option = document.createElement('option');
+        option.value = header;
+        option.textContent = header;
+        select.appendChild(option);
+      }
+
+      select.value = preferredColumn(headers, preferred);
+      select.disabled = false;
+    }
+
+    function resetEnableNavigationAnalysis() {
+      enableNavigationPlan = null;
+      enableNavigationAnalysis.hidden = true;
+      enableNavigationConfirmation.hidden = true;
+      enableNavigationStatus.hidden = true;
+      enableNavigationContinue.disabled = false;
+      enableNavigationCancel.disabled = false;
+    }
+
+    function refreshCsvActionAvailability() {
+      const hasCsv = Boolean(csvScope?.rows.length);
+      csvMappings.hidden = !hasCsv;
+      csvCourseColumn.disabled = !hasCsv;
+      csvCourseIdType.disabled = !hasCsv;
+      enableNavigationToolColumn.disabled = !hasCsv;
+      enableNavigationValueColumn.disabled = !hasCsv;
+      enableNavigationAnalyze.disabled = !hasCsv ||
+        !csvCourseColumn.value ||
+        !enableNavigationToolColumn.value ||
+        !enableNavigationValueColumn.value ||
+        enableNavigationRunning;
+    }
+
+    async function loadCsvScope(file) {
+      resetEnableNavigationAnalysis();
+      csvScope = null;
+
+      if (!file) {
+        csvMappings.hidden = true;
+        csvStatus.classList.remove('is-error');
+        csvStatus.textContent = 'Optional. Upload a CSV to provide a reusable course scope for actions below.';
+        refreshCsvActionAvailability();
+        return;
+      }
+
+      if (file.size > 25 * 1024 * 1024) {
+        csvStatus.classList.add('is-error');
+        csvStatus.textContent = 'The CSV is larger than the 25 MB safety limit.';
+        refreshCsvActionAvailability();
+        return;
+      }
+
+      csvStatus.classList.remove('is-error');
+      csvStatus.textContent = `Reading ${file.name}…`;
+
+      try {
+        const parsed = parseCsvText(await file.text());
+        if (!parsed.rows.length) throw new Error('The CSV has headers but no data rows.');
+
+        csvScope = {
+          fileName: file.name,
+          headers: parsed.headers,
+          rows: parsed.rows
+        };
+
+        populateColumnSelect(
+          csvCourseColumn,
+          parsed.headers,
+          ['course.id', 'course.sis_course_id', 'id', 'sis_course_id']
+        );
+        populateColumnSelect(
+          enableNavigationToolColumn,
+          parsed.headers,
+          ['tab.id', 'navigation_id', 'tool_id']
+        );
+        populateColumnSelect(
+          enableNavigationValueColumn,
+          parsed.headers,
+          ['tab.hidden', 'hidden', 'new_hidden', 'new_value']
+        );
+
+        if (/sis_course_id/i.test(csvCourseColumn.value)) {
+          csvCourseIdType.value = 'sis';
+        } else {
+          csvCourseIdType.value = 'canvas';
+        }
+
+        csvStatus.textContent =
+          `${file.name}: ${parsed.rows.length} data row(s), ${parsed.headers.length} column(s).`;
+        refreshCsvActionAvailability();
+      } catch (error) {
+        console.error('Canvas Admin Tool Drawer could not parse the CSV.', error);
+        csvStatus.classList.add('is-error');
+        csvStatus.textContent = `CSV could not be used: ${error.message}`;
+        refreshCsvActionAvailability();
+      }
+    }
+
     function openContext(contextName) {
       for (const item of accordionItems) {
         const isActive = item.dataset.context === contextName;
@@ -1562,6 +2003,25 @@
       });
     }
 
+    function openCourseAction(actionName) {
+      for (const item of courseActionItems) {
+        const isActive = item.dataset.courseAction === actionName;
+        const trigger = item.querySelector('.action-accordion-trigger');
+        const panel = item.querySelector('.action-accordion-panel');
+
+        item.classList.toggle('is-active', isActive);
+        trigger.setAttribute('aria-expanded', String(isActive));
+        panel.hidden = !isActive;
+      }
+    }
+
+    for (const item of courseActionItems) {
+      item.querySelector('.action-accordion-trigger').addEventListener('click', () => {
+        const isOpen = item.classList.contains('is-active');
+        openCourseAction(isOpen ? '' : item.dataset.courseAction);
+      });
+    }
+
     for (const input of contextInputs) {
       input.addEventListener('input', () => {
         input.value = input.value.replace(/\D/g, '');
@@ -1570,6 +2030,21 @@
     }
 
     adminContextInput.addEventListener('input', scheduleTermsLoad);
+    csvFileInput.addEventListener('change', () => loadCsvScope(csvFileInput.files?.[0]));
+    for (const select of [
+      csvCourseColumn,
+      csvCourseIdType,
+      enableNavigationToolColumn,
+      enableNavigationValueColumn
+    ]) {
+      select.addEventListener('change', () => {
+        if (select === csvCourseColumn) {
+          csvCourseIdType.value = /sis_course_id/i.test(csvCourseColumn.value) ? 'sis' : 'canvas';
+        }
+        resetEnableNavigationAnalysis();
+        refreshCsvActionAvailability();
+      });
+    }
     termSelect.addEventListener('change', () => {
       const selected = Array.from(termSelect.selectedOptions);
       const allTermsOption = selected.find(option => option.value === '__all__');
@@ -1591,6 +2066,15 @@
     function setAdminScopeLocked(isLocked) {
       adminContextInput.disabled = isLocked;
       publishedOnlyCheckbox.disabled = isLocked;
+      csvFileInput.disabled = isLocked;
+      csvCourseColumn.disabled = isLocked || !csvScope;
+      csvCourseIdType.disabled = isLocked || !csvScope;
+      enableNavigationToolColumn.disabled = isLocked || !csvScope;
+      enableNavigationValueColumn.disabled = isLocked || !csvScope;
+      enableNavigationAnalyze.disabled = isLocked || !csvScope ||
+        !csvCourseColumn.value ||
+        !enableNavigationToolColumn.value ||
+        !enableNavigationValueColumn.value;
       termSelect.disabled = isLocked ||
         termsAccountId !== adminContextInput.value.trim() ||
         !availableTerms.length;
@@ -1796,7 +2280,7 @@
     }
 
     navigationReportTrigger.addEventListener('click', () => {
-      if (navigationReportRunning || pendingNavigationScope) return;
+      if (navigationReportRunning || pendingNavigationScope || enableNavigationRunning) return;
 
       const accountId = adminContextInput.value.trim();
       if (!/^\d+$/.test(accountId)) {
@@ -1856,6 +2340,334 @@
       navigationCancel.disabled = true;
       runNavigationLinksReport(pendingNavigationScope);
     });
+
+    function courseApiIdentifier(value, idType) {
+      const identifier = String(value ?? '').trim();
+      if (!identifier) throw new Error('Course ID is blank.');
+      if (idType === 'canvas') {
+        if (!/^\d+$/.test(identifier)) throw new Error('Canvas course ID must be numeric.');
+        return identifier;
+      }
+      return `sis_course_id:${identifier}`;
+    }
+
+    function enableNavigationCounts(entries) {
+      const counts = {
+        willEnable: 0,
+        enabled: 0,
+        alreadyEnabled: 0,
+        unavailable: 0,
+        invalid: 0,
+        duplicate: 0,
+        errors: 0
+      };
+
+      for (const entry of entries) {
+        if (entry.status === 'will_enable') counts.willEnable++;
+        else if (entry.status === 'enabled') counts.enabled++;
+        else if (entry.status === 'already_enabled') counts.alreadyEnabled++;
+        else if (entry.status === 'unavailable') counts.unavailable++;
+        else if (entry.status === 'invalid') counts.invalid++;
+        else if (entry.status === 'duplicate') counts.duplicate++;
+        else if (entry.status === 'error') counts.errors++;
+      }
+      return counts;
+    }
+
+    function enableNavigationSummaryText(entries) {
+      const counts = enableNavigationCounts(entries);
+      const changedText = counts.enabled ? `${counts.enabled} enabled, ` : '';
+      return `${entries.length} CSV row(s): ${changedText}${counts.willEnable} will be enabled, ` +
+        `${counts.alreadyEnabled} already enabled, ${counts.unavailable} unavailable, ` +
+        `${counts.invalid} invalid, ${counts.duplicate} duplicate, ${counts.errors} API error(s).`;
+    }
+
+    function showEnableNavigationStatus(message, { isError = false } = {}) {
+      enableNavigationStatus.hidden = false;
+      enableNavigationStatus.classList.toggle('is-error', isError);
+      enableNavigationStatusText.textContent = message;
+    }
+
+    async function analyzeEnableNavigation() {
+      if (enableNavigationRunning || navigationReportRunning || !csvScope) return;
+
+      const courseColumn = csvCourseColumn.value;
+      const toolColumn = enableNavigationToolColumn.value;
+      const valueColumn = enableNavigationValueColumn.value;
+      if (!courseColumn || !toolColumn || !valueColumn) {
+        showEnableNavigationStatus('Choose all three CSV columns before analyzing.', { isError: true });
+        return;
+      }
+
+      enableNavigationRunning = true;
+      enableNavigationPlan = null;
+      enableNavigationAnalysis.hidden = true;
+      enableNavigationConfirmation.hidden = true;
+      enableNavigationStatus.classList.remove('is-error');
+      enableNavigationProgress.removeAttribute('value');
+      enableNavigationProgress.removeAttribute('max');
+      showEnableNavigationStatus('Validating CSV rows…');
+      navigationReportTrigger.disabled = true;
+      setAdminScopeLocked(true);
+
+      try {
+        const entries = csvScope.rows.map((row, index) => {
+          const entry = {
+            index,
+            row,
+            courseValue: String(row[courseColumn] ?? '').trim(),
+            tabId: String(row[toolColumn] ?? '').trim(),
+            desiredHidden: parseCanvasBoolean(row[valueColumn]),
+            status: '',
+            error: '',
+            tab: null
+          };
+
+          try {
+            entry.courseRef = courseApiIdentifier(entry.courseValue, csvCourseIdType.value);
+            if (!entry.tabId) throw new Error('Navigation tool ID is blank.');
+            if (entry.desiredHidden === null) {
+              throw new Error(`New hidden value is not recognizable: ${row[valueColumn] ?? ''}`);
+            }
+            if (entry.desiredHidden !== false) {
+              throw new Error('This action only accepts a new hidden value of false/enabled/visible.');
+            }
+          } catch (error) {
+            entry.status = 'invalid';
+            entry.error = error.message;
+          }
+
+          return entry;
+        });
+
+        const firstByTarget = new Map();
+        for (const entry of entries) {
+          if (entry.status) continue;
+          const targetKey = `${entry.courseRef}\u0000${entry.tabId}`;
+          if (firstByTarget.has(targetKey)) {
+            entry.status = 'duplicate';
+            entry.error = `Duplicates CSV row ${firstByTarget.get(targetKey).row['input.row']}.`;
+          } else {
+            firstByTarget.set(targetKey, entry);
+          }
+        }
+
+        const courseRefs = Array.from(new Set(
+          entries.filter(entry => !entry.status).map(entry => entry.courseRef)
+        ));
+        const tabsByCourse = new Map();
+        let analyzedCourses = 0;
+        enableNavigationProgress.max = Math.max(1, courseRefs.length);
+        enableNavigationProgress.value = 0;
+
+        await Promise.all(courseRefs.map(async courseRef => {
+          try {
+            const tabs = await canvasApi.getAll(
+              `/api/v1/courses/${encodeURIComponent(courseRef)}/tabs?per_page=100`
+            );
+            tabsByCourse.set(courseRef, { tabs, error: null });
+          } catch (error) {
+            tabsByCourse.set(courseRef, { tabs: [], error });
+          } finally {
+            analyzedCourses++;
+            enableNavigationProgress.value = analyzedCourses;
+            showEnableNavigationStatus(
+              `Analyzing courses: ${analyzedCourses} of ${courseRefs.length}.`
+            );
+          }
+        }));
+
+        for (const entry of entries) {
+          if (entry.status) continue;
+          const courseResult = tabsByCourse.get(entry.courseRef);
+          if (courseResult?.error) {
+            entry.status = 'error';
+            entry.error = courseResult.error.message;
+            continue;
+          }
+
+          const tab = courseResult?.tabs.find(candidate => String(candidate.id) === entry.tabId);
+          if (!tab) {
+            entry.status = 'unavailable';
+            entry.error = 'The navigation tool is not available in this course.';
+            continue;
+          }
+          entry.tab = tab;
+
+          if (['home', 'settings'].includes(entry.tabId)) {
+            entry.status = 'unavailable';
+            entry.error = 'Canvas does not allow this navigation tab to be hidden or enabled.';
+          } else if (tab.hidden === true) {
+            entry.status = 'will_enable';
+          } else {
+            entry.status = 'already_enabled';
+          }
+        }
+
+        enableNavigationPlan = {
+          sourceFileName: csvScope.fileName,
+          sourceHeaders: [...csvScope.headers],
+          entries
+        };
+        const summaryText = enableNavigationSummaryText(entries);
+        const counts = enableNavigationCounts(entries);
+        enableNavigationAnalysisText.textContent = summaryText;
+        enableNavigationAnalysis.hidden = false;
+        showEnableNavigationStatus('Read-only analysis complete.');
+
+        if (counts.willEnable > 0) {
+          enableNavigationConfirmationText.textContent =
+            `Enable ${counts.willEnable} navigation tab(s) now? Already-enabled, unavailable, invalid, duplicate, and failed rows will not be changed.`;
+          enableNavigationConfirmation.hidden = false;
+          enableNavigationContinue.focus();
+        } else {
+          setAdminScopeLocked(false);
+          navigationReportTrigger.disabled = false;
+        }
+      } catch (error) {
+        console.error('Enable navigation analysis failed.', error);
+        enableNavigationPlan = null;
+        enableNavigationProgress.removeAttribute('value');
+        enableNavigationProgress.removeAttribute('max');
+        showEnableNavigationStatus(`Analysis stopped: ${error.message}`, { isError: true });
+        setAdminScopeLocked(false);
+        navigationReportTrigger.disabled = false;
+      } finally {
+        enableNavigationRunning = false;
+        if (enableNavigationConfirmation.hidden) refreshCsvActionAvailability();
+      }
+    }
+
+    function navigationActionResultRows(plan) {
+      const tabKeys = Array.from(new Set([
+        'hidden',
+        'unused',
+        ...plan.entries.flatMap(entry => Object.keys(entry.tab || {}))
+      ])).sort();
+      const generatedColumns = [
+        'input.row',
+        'run.action',
+        'run.completed_at',
+        'run.status',
+        'run.error',
+        ...tabKeys.map(key => `tab.${key}`)
+      ];
+      const columnNames = [...plan.sourceHeaders];
+      for (const key of generatedColumns) {
+        if (!columnNames.includes(key)) columnNames.push(key);
+      }
+
+      const completedAt = new Date().toISOString();
+      const rows = plan.entries.map(entry => {
+        const row = {
+          ...entry.row,
+          'run.action': 'enable_navigation',
+          'run.completed_at': completedAt,
+          'run.status': entry.status,
+          'run.error': entry.error || ''
+        };
+        for (const [key, value] of Object.entries(entry.tab || {})) {
+          row[`tab.${key}`] = value;
+        }
+        if (entry.tab) {
+          row['tab.hidden'] = entry.tab.hidden === true;
+          row['tab.unused'] = entry.tab.unused === true;
+        }
+        return row;
+      });
+
+      return {
+        rows,
+        columns: columnNames.map(key => ({ key, label: key }))
+      };
+    }
+
+    async function executeEnableNavigation() {
+      if (!enableNavigationPlan || enableNavigationRunning) return;
+
+      enableNavigationRunning = true;
+      enableNavigationConfirmation.hidden = true;
+      enableNavigationContinue.disabled = true;
+      enableNavigationCancel.disabled = true;
+      const changes = enableNavigationPlan.entries.filter(entry => entry.status === 'will_enable');
+      let completed = 0;
+      let succeeded = 0;
+      let failed = 0;
+      enableNavigationProgress.max = Math.max(1, changes.length);
+      enableNavigationProgress.value = 0;
+      showEnableNavigationStatus(`Enabling navigation: 0 of ${changes.length}.`);
+
+      try {
+        await Promise.all(changes.map(async entry => {
+          try {
+            const result = await canvasApi.request(
+              `/api/v1/courses/${encodeURIComponent(entry.courseRef)}/tabs/${encodeURIComponent(entry.tabId)}`,
+              { method: 'PUT', body: { hidden: 'false' } }
+            );
+            entry.tab = result.data || entry.tab;
+            entry.status = 'enabled';
+            entry.error = '';
+            succeeded++;
+          } catch (error) {
+            entry.status = 'error';
+            entry.error = error.message;
+            failed++;
+          } finally {
+            completed++;
+            enableNavigationProgress.value = completed;
+            const apiState = canvasApi.state();
+            const rateText = apiState.rateRemaining === null
+              ? ''
+              : ` Canvas quota remaining: ${apiState.rateRemaining}.`;
+            showEnableNavigationStatus(
+              `Enabling navigation: ${completed} of ${changes.length}. ` +
+              `Succeeded: ${succeeded}. Errors: ${failed}.${rateText}`,
+              { isError: failed > 0 }
+            );
+          }
+        }));
+
+        const output = navigationActionResultRows(enableNavigationPlan);
+        const baseName = enableNavigationPlan.sourceFileName
+          .replace(/\.csv$/i, '')
+          .replace(/[^a-z0-9._-]+/gi, '-');
+        downloadCsv({
+          ...output,
+          filename: `${baseName || 'canvas-courses'}.enable-navigation.${timestampForFilename()}.csv`
+        });
+
+        enableNavigationAnalysisText.textContent = enableNavigationSummaryText(enableNavigationPlan.entries);
+        enableNavigationAnalysis.hidden = false;
+        showEnableNavigationStatus(
+          `Complete. ${succeeded} navigation tab(s) enabled; ${failed} error(s). Results CSV downloaded.`,
+          { isError: failed > 0 }
+        );
+      } catch (error) {
+        console.error('Enable navigation action failed.', error);
+        showEnableNavigationStatus(`Action stopped: ${error.message}`, { isError: true });
+      } finally {
+        enableNavigationRunning = false;
+        enableNavigationContinue.disabled = false;
+        enableNavigationCancel.disabled = false;
+        navigationReportTrigger.disabled = false;
+        setAdminScopeLocked(false);
+        refreshCsvActionAvailability();
+      }
+    }
+
+    enableNavigationAnalyze.addEventListener('click', analyzeEnableNavigation);
+
+    enableNavigationCancel.addEventListener('click', () => {
+      if (enableNavigationRunning) return;
+      enableNavigationPlan = null;
+      enableNavigationConfirmation.hidden = true;
+      setAdminScopeLocked(false);
+      navigationReportTrigger.disabled = false;
+      refreshCsvActionAvailability();
+      enableNavigationAnalyze.focus();
+    });
+
+    enableNavigationContinue.addEventListener('click', executeEnableNavigation);
 
     function setOpen(isOpen) {
       shell.classList.toggle('is-open', isOpen);

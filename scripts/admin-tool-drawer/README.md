@@ -23,7 +23,11 @@ operate on courses. A grouped, multiple-selection **Terms** scope provides flexi
 **Current Terms**, **Future Terms**, **Past Terms**, and **Undated Terms**. All Current Terms is the
 safe default and can be combined with individual terms from the other groups. The selector excludes
 root-account terms that Canvas reports are unused in the selected account or subaccount. All Terms
-therefore means all terms used in that selected scope, not every consortium term.
+therefore means all terms used in that selected scope, not every consortium term. Dated terms are
+ordered by `start_at` within each group.
+
+Course tools are nested action accordions. This keeps each action's mappings, analysis, confirmation,
+progress, and results separate while allowing the shared account and CSV scopes to be reused.
 
 ### Course navigation links report
 
@@ -38,6 +42,32 @@ Starting the report opens an inline Continue/Cancel confirmation. While it runs,
 the number of courses checked, navigation links found, course errors, and the latest Canvas quota
 remaining value. A failed course is recorded as an error row without discarding successful results
 from other courses.
+
+### CSV course scope
+
+The optional **CSV course scope** parses a local CSV in the browser; it does not send the file to a
+separate service. After loading a file, select the column containing the course identifier and whether
+the values are Canvas course IDs or SIS course IDs. The parsed rows and that course mapping are shared
+by CSV-driven actions in the Courses accordion. Duplicate or blank headers are rejected so later
+field mappings remain unambiguous.
+
+### Enable in course navigation
+
+The **Enable in course navigation** action requires two additional, action-specific mappings:
+
+* **Navigation tool ID column** contains Canvas tab IDs such as `context_external_tool_4`.
+* **New hidden value column** contains a value meaning false/enabled/visible. Values requesting true
+  are rejected because this action only enables navigation.
+
+**Analyze CSV** is read-only. It gets the current tabs for each unique course and classifies every
+input row as will enable, already enabled, unavailable, invalid, duplicate, or API error. No write is
+made until the user confirms the resulting change count. Confirmed rows are updated with
+`hidden=false` through the Canvas Tabs API. Home and Settings are reported as unavailable because
+Canvas does not allow them to be managed this way.
+
+After execution, a results CSV preserves the source columns and adds the returned `tab.*` fields plus
+`run.action`, `run.completed_at`, `run.status`, and `run.error`. The shared scheduler applies the same
+concurrency, quota, retry, and backoff controls used by reports.
 
 The icon is only added when the current Canvas user can view at least one account through Canvas's
 Accounts API. Canvas normally returns an empty account list for students and teachers. The result is
@@ -83,11 +113,13 @@ future reports so source fields remain recognizable and reusable without another
 1. Sign in to a Canvas site hosted on `instructure.com` with an account-admin role.
 2. Select the tools icon in the upper-right corner.
 3. Confirm or enter the Canvas ID in the relevant Admin, Course, or Page accordion.
-4. For the navigation report, open **Admin → Courses**, select the term scope and whether to limit the
-   scope to published courses, and select **Get all navigation links**.
-5. Close the drawer with its close button, the shaded page backdrop, or the Escape key.
+4. For the navigation report, open **Admin → Courses → Get all navigation links**, select the term
+   scope and whether to limit the scope to published courses, and prepare the report.
+5. For a CSV-driven action, upload the CSV in the Admin scope, map its course ID column, then open the
+   action accordion and provide the action-specific column mappings.
+6. Close the drawer with its close button, the shaded page backdrop, or the Escape key.
 
-The drawer currently contains no data-changing tools.
+Data-changing tools always require a read-only analysis followed by an explicit confirmation.
 
 ## Updating / removing
 
