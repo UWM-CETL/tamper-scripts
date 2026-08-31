@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.1.0
+// @version      0.2.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -21,6 +21,60 @@
 
   function isCanvasApplicationPage() {
     return Boolean(document.querySelector('#header.ic-app-header'));
+  }
+
+  function idFromBodyContext(contextName) {
+    const match = document.body.className.match(
+      new RegExp(`(?:^|\\s)context-${contextName}_(\\d+)(?:\\s|$)`)
+    );
+
+    return match ? match[1] : '';
+  }
+
+  function detectCanvasContext() {
+    const path = window.location.pathname;
+    const accountMatch = path.match(/^\/accounts\/(\d+)(?:\/|$)/);
+    const courseMatch = path.match(/^\/courses\/(\d+)(?:\/|$)/);
+
+    const pagePatterns = [
+      { type: 'Assignment', pattern: /\/assignments\/(\d+)(?:\/|$)/ },
+      { type: 'Quiz', pattern: /\/quizzes\/(\d+)(?:\/|$)/ },
+      { type: 'Discussion', pattern: /\/discussion_topics\/(\d+)(?:\/|$)/ },
+      { type: 'Module', pattern: /\/modules\/(\d+)(?:\/|$)/ },
+      { type: 'File', pattern: /\/files\/(\d+)(?:\/|$)/ },
+      { type: 'User', pattern: /\/users\/(\d+)(?:\/|$)/ },
+      { type: 'Section', pattern: /\/sections\/(\d+)(?:\/|$)/ },
+      { type: 'External tool', pattern: /\/external_tools\/(\d+)(?:\/|$)/ }
+    ];
+
+    const detectedPage = pagePatterns
+      .map(candidate => ({ ...candidate, match: path.match(candidate.pattern) }))
+      .find(candidate => candidate.match);
+
+    const isCanvasPage = /\/pages\/[^/]+(?:\/|$)/.test(path);
+    const pageIdMatch = path.match(/\/pages\/(\d+)(?:\/|$)/);
+    const pageIsObvious = Boolean(detectedPage || isCanvasPage);
+    const accountId = accountMatch?.[1] || idFromBodyContext('account');
+    const courseId = courseMatch?.[1] || idFromBodyContext('course');
+    const pageId = detectedPage?.match?.[1] || pageIdMatch?.[1] || '';
+    const pageType = detectedPage?.type || (isCanvasPage ? 'Page' : '');
+
+    let activeContext = 'course';
+    if (pageIsObvious) {
+      activeContext = 'page';
+    } else if (accountId) {
+      activeContext = 'admin';
+    } else if (courseId) {
+      activeContext = 'course';
+    }
+
+    return {
+      activeContext,
+      accountId,
+      courseId,
+      pageId,
+      pageType
+    };
   }
 
   function readCachedAdminStatus() {
@@ -84,6 +138,7 @@
   function createToolDrawer() {
     if (document.getElementById(HOST_ID) || !document.body) return;
 
+    const canvasContext = detectCanvasContext();
     const host = document.createElement('div');
     host.id = HOST_ID;
     const shadowRoot = host.attachShadow({ mode: 'open' });
@@ -134,7 +189,9 @@
         }
 
         .launcher:focus-visible,
-        .close-button:focus-visible {
+        .close-button:focus-visible,
+        .accordion-trigger:focus-visible,
+        .context-id:focus-visible {
           outline: 3px solid var(--uwm-warning);
           outline-offset: 3px;
         }
@@ -249,22 +306,103 @@
         }
 
         .warning p,
-        .empty-state p {
+        .context-help {
           color: var(--uwm-muted);
           line-height: 1.5;
           margin: 0;
         }
 
-        .empty-state {
-          border: 1px dashed rgb(255 247 237 / 28%);
-          border-radius: 10px;
+        .context-accordions {
+          display: grid;
+          gap: 10px;
           margin: 0 24px 24px;
-          padding: 22px 18px;
         }
 
-        .empty-state h3 {
+        .accordion-item {
+          background: rgb(255 255 255 / 3%);
+          border: 1px solid rgb(255 247 237 / 22%);
+          border-radius: 10px;
+          overflow: hidden;
+        }
+
+        .accordion-item.is-active {
+          border-color: rgb(244 185 66 / 58%);
+          box-shadow: inset 3px 0 0 var(--uwm-warning);
+        }
+
+        .accordion-trigger {
+          align-items: center;
+          background: transparent;
+          border: 0;
+          color: var(--uwm-text);
+          cursor: pointer;
+          display: flex;
+          font: inherit;
           font-size: 1rem;
-          margin: 0 0 8px;
+          font-weight: 700;
+          gap: 12px;
+          justify-content: space-between;
+          padding: 16px 17px;
+          text-align: left;
+          width: 100%;
+        }
+
+        .accordion-trigger:hover {
+          background: rgb(255 255 255 / 6%);
+        }
+
+        .accordion-chevron {
+          color: var(--uwm-warning);
+          font-size: 1.15rem;
+          transform: rotate(0deg);
+          transition: transform 140ms ease;
+        }
+
+        .accordion-trigger[aria-expanded="true"] .accordion-chevron {
+          transform: rotate(90deg);
+        }
+
+        .accordion-panel {
+          border-top: 1px solid rgb(255 247 237 / 14%);
+          padding: 17px;
+        }
+
+        .accordion-panel[hidden] {
+          display: none;
+        }
+
+        .context-label {
+          color: var(--uwm-text);
+          display: block;
+          font-size: 0.82rem;
+          font-weight: 700;
+          margin-bottom: 7px;
+        }
+
+        .context-id {
+          appearance: textfield;
+          background: #fffaf4;
+          border: 2px solid transparent;
+          border-radius: 8px;
+          color: #2a1012;
+          font: inherit;
+          font-size: 1rem;
+          padding: 10px 11px;
+          width: 100%;
+        }
+
+        .context-id:hover {
+          border-color: rgb(244 185 66 / 70%);
+        }
+
+        .context-help {
+          font-size: 0.8rem;
+          margin-top: 8px;
+        }
+
+        .context-kind {
+          color: var(--uwm-warning);
+          font-weight: 700;
         }
 
         .is-open .backdrop {
@@ -310,7 +448,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
               fill="currentColor"
-              d="M12 2.25 1.7 20.1a1.1 1.1 0 0 0 .95 1.65h18.7a1.1 1.1 0 0 0 .95-1.65L12 2.25Zm0 5.1c.55 0 1 .45 1 1v5.25a1 1 0 1 1-2 0V8.35c0-.55.45-1 1-1Zm0 10.5a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z"
+              d="M14.7 6.3a4.8 4.8 0 0 0-5.82 6.91l-5.9 5.9a1.35 1.35 0 0 0 1.91 1.91l5.9-5.9a4.8 4.8 0 0 0 6.91-5.82l-2.64 2.64-2.35-.65-.65-2.35L14.7 6.3Zm-10.5 13.5a.72.72 0 1 1 1.02-1.02.72.72 0 0 1-1.02 1.02Z"
             />
           </svg>
         </button>
@@ -338,10 +476,43 @@
             <p>Read each tool carefully and confirm the target before taking an action.</p>
           </div>
 
-          <section class="empty-state" aria-labelledby="uwm-admin-tools-heading">
-            <h3 id="uwm-admin-tools-heading">Admin tools</h3>
-            <p>The drawer is ready. Individual admin workflows can be added here.</p>
-          </section>
+          <div class="context-accordions" aria-label="Canvas tool contexts">
+            <section class="accordion-item" data-context="admin">
+              <button class="accordion-trigger" type="button" id="uwm-admin-context-trigger" aria-expanded="false" aria-controls="uwm-admin-context-panel">
+                <span>Admin</span>
+                <span class="accordion-chevron" aria-hidden="true">›</span>
+              </button>
+              <div class="accordion-panel" id="uwm-admin-context-panel" role="region" aria-labelledby="uwm-admin-context-trigger" hidden>
+                <label class="context-label" for="uwm-admin-context-id">Canvas account ID</label>
+                <input class="context-id" id="uwm-admin-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 49" value="${canvasContext.accountId}">
+                <p class="context-help">${canvasContext.accountId ? 'Filled from the current Canvas account.' : 'Enter the account or subaccount ID for these tools.'}</p>
+              </div>
+            </section>
+
+            <section class="accordion-item" data-context="course">
+              <button class="accordion-trigger" type="button" id="uwm-course-context-trigger" aria-expanded="false" aria-controls="uwm-course-context-panel">
+                <span>Course</span>
+                <span class="accordion-chevron" aria-hidden="true">›</span>
+              </button>
+              <div class="accordion-panel" id="uwm-course-context-panel" role="region" aria-labelledby="uwm-course-context-trigger" hidden>
+                <label class="context-label" for="uwm-course-context-id">Canvas course ID</label>
+                <input class="context-id" id="uwm-course-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 900204" value="${canvasContext.courseId}">
+                <p class="context-help">${canvasContext.courseId ? 'Filled from the current Canvas course.' : 'Enter the course ID for these tools.'}</p>
+              </div>
+            </section>
+
+            <section class="accordion-item" data-context="page">
+              <button class="accordion-trigger" type="button" id="uwm-page-context-trigger" aria-expanded="false" aria-controls="uwm-page-context-panel">
+                <span>Page</span>
+                <span class="accordion-chevron" aria-hidden="true">›</span>
+              </button>
+              <div class="accordion-panel" id="uwm-page-context-panel" role="region" aria-labelledby="uwm-page-context-trigger" hidden>
+                <label class="context-label" for="uwm-page-context-id">Canvas page or object ID</label>
+                <input class="context-id" id="uwm-page-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter a Canvas ID" value="${canvasContext.pageId}">
+                <p class="context-help">${canvasContext.pageType ? '<span class="context-kind">' + canvasContext.pageType + ' context detected.</span> ' : ''}${canvasContext.pageId ? 'The ID was filled from the current URL.' : 'Enter the numeric ID for the item these tools should use.'}</p>
+              </div>
+            </section>
+          </div>
         </aside>
       </div>
     `;
@@ -353,6 +524,34 @@
     const backdrop = shadowRoot.querySelector('.backdrop');
     const drawer = shadowRoot.querySelector('.drawer');
     const closeButton = shadowRoot.querySelector('.close-button');
+    const accordionItems = Array.from(shadowRoot.querySelectorAll('.accordion-item'));
+    const contextInputs = Array.from(shadowRoot.querySelectorAll('.context-id'));
+
+    function openContext(contextName) {
+      for (const item of accordionItems) {
+        const isActive = item.dataset.context === contextName;
+        const trigger = item.querySelector('.accordion-trigger');
+        const panel = item.querySelector('.accordion-panel');
+
+        item.classList.toggle('is-active', isActive);
+        trigger.setAttribute('aria-expanded', String(isActive));
+        panel.hidden = !isActive;
+      }
+    }
+
+    for (const item of accordionItems) {
+      item.querySelector('.accordion-trigger').addEventListener('click', () => {
+        openContext(item.dataset.context);
+      });
+    }
+
+    for (const input of contextInputs) {
+      input.addEventListener('input', () => {
+        input.value = input.value.replace(/\D/g, '');
+      });
+    }
+
+    openContext(canvasContext.activeContext);
 
     function setOpen(isOpen) {
       shell.classList.toggle('is-open', isOpen);
