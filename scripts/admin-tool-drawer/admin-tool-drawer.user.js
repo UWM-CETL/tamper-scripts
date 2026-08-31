@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.12.0
+// @version      0.13.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -622,6 +622,44 @@
     return null;
   }
 
+  function sectionApiIdentifier(value, idType) {
+    const identifier = String(value ?? '').trim();
+    if (!identifier) throw new Error('Section ID is blank.');
+    if (idType === 'canvas') {
+      if (!/^\d+$/.test(identifier)) throw new Error('Canvas section ID must be numeric.');
+      return identifier;
+    }
+    return `sis_section_id:${identifier}`;
+  }
+
+  function cloneSectionMarker(sourceSectionId) {
+    return `[src ${sourceSectionId}]`;
+  }
+
+  function cloneSectionName(sourceSection) {
+    const suffix = ` - Copy ${cloneSectionMarker(sourceSection.id)}`;
+    const maximumNameLength = 255;
+    const sourceName = String(sourceSection.name || `Section ${sourceSection.id}`).trim();
+    return `${sourceName.slice(0, Math.max(1, maximumNameLength - suffix.length)).trimEnd()}${suffix}`;
+  }
+
+  function cloneSourceSectionId(sectionName) {
+    return String(sectionName || '').match(/\[src (\d+)\]$/)?.[1] || '';
+  }
+
+  function enrollmentRoleKey(enrollment) {
+    return [enrollment.type || '', enrollment.role_id || ''].join('|');
+  }
+
+  function enrollmentIdentityKey(enrollment) {
+    return [
+      enrollment.user_id || '',
+      enrollment.type || '',
+      enrollment.role_id || '',
+      enrollment.associated_user_id || ''
+    ].join('|');
+  }
+
   async function extractZipEntryText(arrayBuffer, expectedFileName) {
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -847,6 +885,7 @@
         .field-select:focus-visible,
         .csv-file:focus-visible,
         .scope-checkbox:focus-visible,
+        .role-checkbox:focus-visible,
         .report-trigger:focus-visible,
         .action-accordion-trigger:focus-visible,
         .confirmation-button:focus-visible {
@@ -1144,6 +1183,16 @@
           padding-top: 13px;
         }
 
+        .course-csv-scope {
+          border-top: 0;
+          margin-top: 0;
+          padding-top: 0;
+        }
+
+        .course-actions {
+          margin-top: 15px;
+        }
+
         .scope-section-title {
           color: var(--uwm-text);
           font-size: 0.82rem;
@@ -1379,6 +1428,49 @@
           font-size: 0.78rem;
           line-height: 1.45;
           margin: 0;
+        }
+
+        .role-selector {
+          border: 1px solid rgb(244 185 66 / 28%);
+          border-radius: 7px;
+          display: grid;
+          gap: 8px;
+          margin: 11px 0 0;
+          padding: 10px;
+        }
+
+        .role-selector[hidden] {
+          display: none;
+        }
+
+        .role-selector legend {
+          color: var(--uwm-text);
+          font-size: 0.8rem;
+          font-weight: 800;
+          padding: 0 4px;
+        }
+
+        .role-option {
+          align-items: flex-start;
+          color: var(--uwm-text);
+          cursor: pointer;
+          display: flex;
+          font-size: 0.78rem;
+          gap: 8px;
+          line-height: 1.35;
+        }
+
+        .role-checkbox {
+          accent-color: var(--uwm-warning);
+          flex: 0 0 auto;
+          height: 16px;
+          margin: 1px 0 0;
+          width: 16px;
+        }
+
+        .role-count {
+          color: var(--uwm-muted);
+          font-weight: 400;
         }
 
         .confirmation,
@@ -1695,9 +1787,77 @@
                 <span class="accordion-chevron" aria-hidden="true">›</span>
               </button>
               <div class="accordion-panel" id="uwm-course-context-panel" role="region" aria-labelledby="uwm-course-context-trigger" hidden>
-                <label class="context-label" for="uwm-course-context-id">Canvas course ID</label>
-                <input class="context-id" id="uwm-course-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 900204" value="${canvasContext.courseId}">
+                <div class="account-scope-row">
+                  <label class="context-label" for="uwm-course-context-id">Canvas course ID</label>
+                  <input class="context-id" id="uwm-course-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 900204" value="${canvasContext.courseId}">
+                </div>
                 <p class="context-help">${canvasContext.courseId ? 'Filled from the current Canvas course.' : 'Enter the course ID for these tools.'}</p>
+
+                <div class="admin-scope-filter">
+                  <div class="csv-scope course-csv-scope">
+                    <p class="scope-section-title">CSV input</p>
+                    <input class="csv-file" id="uwm-course-csv-file" type="file" accept=".csv,text/csv">
+                    <p class="term-status" id="uwm-course-csv-status">Upload the source-section file; each course action will ask for the columns it needs.</p>
+                  </div>
+                </div>
+
+                <div class="action-accordions course-actions" aria-label="Course-context actions">
+                  <section class="action-accordion-item" data-course-action="clone-sections">
+                    <button class="action-accordion-trigger" type="button" id="uwm-clone-sections-trigger" aria-expanded="false" aria-controls="uwm-clone-sections-panel">
+                      <span>Clone or sync sections</span>
+                      <span class="accordion-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div class="action-accordion-panel" id="uwm-clone-sections-panel" role="region" aria-labelledby="uwm-clone-sections-trigger" hidden>
+                      <p class="tool-description">Creates or synchronizes section clones from the uploaded CSV into this destination course. Analysis is read-only until the change plan is confirmed.</p>
+                      <div class="mapping-grid">
+                        <label class="field-label" for="uwm-clone-source-section-column">
+                          Source section ID column
+                          <select class="field-select" id="uwm-clone-source-section-column" disabled></select>
+                        </label>
+                        <label class="field-label" for="uwm-clone-source-section-id-type">
+                          Source section ID type
+                          <select class="field-select" id="uwm-clone-source-section-id-type" disabled>
+                            <option value="canvas">Canvas section ID</option>
+                            <option value="sis">SIS section ID</option>
+                          </select>
+                        </label>
+                        <label class="field-label" for="uwm-clone-holding-course-id">
+                          Holding-tank Canvas course ID
+                          <input class="context-id" id="uwm-clone-holding-course-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 881410">
+                        </label>
+                      </div>
+                      <label class="scope-label" for="uwm-clone-limit-students" style="margin-top: 11px;">
+                        <input class="scope-checkbox" id="uwm-clone-limit-students" type="checkbox" checked>
+                        <span>Limit students to their cloned section</span>
+                      </label>
+                      <p class="tool-description">Clone identity uses the exact <code>[src Canvas-section-ID]</code> name marker and the holding course recorded by Canvas after cross-listing. Source SIS IDs and dates are not copied. Notifications are always suppressed.</p>
+                      <button class="action-button" id="uwm-clone-sections-analyze" type="button" disabled>Analyze sections</button>
+
+                      <div class="analysis-summary" id="uwm-clone-sections-analysis" hidden>
+                        <p id="uwm-clone-sections-analysis-text"></p>
+                      </div>
+
+                      <fieldset class="role-selector" id="uwm-clone-role-selector" hidden>
+                        <legend>Enrollment roles to synchronize</legend>
+                        <div id="uwm-clone-role-options"></div>
+                      </fieldset>
+                      <button class="action-button secondary" id="uwm-clone-sections-prepare" type="button" hidden disabled>Prepare selected roles</button>
+
+                      <div class="confirmation" id="uwm-clone-sections-confirmation" hidden>
+                        <p id="uwm-clone-sections-confirmation-text"></p>
+                        <div class="confirmation-actions">
+                          <button class="confirmation-button primary" id="uwm-clone-sections-continue" type="button">Apply section sync</button>
+                          <button class="confirmation-button" id="uwm-clone-sections-cancel" type="button">Cancel</button>
+                        </div>
+                      </div>
+
+                      <div class="run-status" id="uwm-clone-sections-status" role="status" aria-live="polite" hidden>
+                        <progress class="run-progress" id="uwm-clone-sections-progress"></progress>
+                        <p id="uwm-clone-sections-status-text"></p>
+                      </div>
+                    </div>
+                  </section>
+                </div>
               </div>
             </section>
 
@@ -1736,6 +1896,9 @@
     const csvCourseColumn = shadowRoot.querySelector('#uwm-admin-csv-course-column');
     const csvCourseIdType = shadowRoot.querySelector('#uwm-admin-csv-course-id-type');
     const csvStatus = shadowRoot.querySelector('#uwm-admin-csv-status');
+    const courseContextInput = shadowRoot.querySelector('#uwm-course-context-id');
+    const courseCsvFileInput = shadowRoot.querySelector('#uwm-course-csv-file');
+    const courseCsvStatus = shadowRoot.querySelector('#uwm-course-csv-status');
     const navigationReportTrigger = shadowRoot.querySelector('#uwm-navigation-links-report');
     const navigationConfirmation = shadowRoot.querySelector('#uwm-navigation-links-confirmation');
     const navigationConfirmationText = shadowRoot.querySelector('#uwm-navigation-links-confirmation-text');
@@ -1765,6 +1928,23 @@
     const enableNavigationStatus = shadowRoot.querySelector('#uwm-enable-navigation-status');
     const enableNavigationProgress = shadowRoot.querySelector('#uwm-enable-navigation-progress');
     const enableNavigationStatusText = shadowRoot.querySelector('#uwm-enable-navigation-status-text');
+    const cloneSourceSectionColumn = shadowRoot.querySelector('#uwm-clone-source-section-column');
+    const cloneSourceSectionIdType = shadowRoot.querySelector('#uwm-clone-source-section-id-type');
+    const cloneHoldingCourseInput = shadowRoot.querySelector('#uwm-clone-holding-course-id');
+    const cloneLimitStudents = shadowRoot.querySelector('#uwm-clone-limit-students');
+    const cloneAnalyze = shadowRoot.querySelector('#uwm-clone-sections-analyze');
+    const cloneAnalysis = shadowRoot.querySelector('#uwm-clone-sections-analysis');
+    const cloneAnalysisText = shadowRoot.querySelector('#uwm-clone-sections-analysis-text');
+    const cloneRoleSelector = shadowRoot.querySelector('#uwm-clone-role-selector');
+    const cloneRoleOptions = shadowRoot.querySelector('#uwm-clone-role-options');
+    const clonePrepare = shadowRoot.querySelector('#uwm-clone-sections-prepare');
+    const cloneConfirmation = shadowRoot.querySelector('#uwm-clone-sections-confirmation');
+    const cloneConfirmationText = shadowRoot.querySelector('#uwm-clone-sections-confirmation-text');
+    const cloneContinue = shadowRoot.querySelector('#uwm-clone-sections-continue');
+    const cloneCancel = shadowRoot.querySelector('#uwm-clone-sections-cancel');
+    const cloneStatus = shadowRoot.querySelector('#uwm-clone-sections-status');
+    const cloneProgress = shadowRoot.querySelector('#uwm-clone-sections-progress');
+    const cloneStatusText = shadowRoot.querySelector('#uwm-clone-sections-status-text');
 
     let pendingNavigationScope = null;
     let navigationReportRunning = false;
@@ -1774,6 +1954,11 @@
     let csvScope = null;
     let enableNavigationPlan = null;
     let enableNavigationRunning = false;
+    let courseCsvScope = null;
+    let cloneAnalysisPlan = null;
+    let cloneExecutionPlan = null;
+    let cloneRunning = false;
+    let courseScopeLocked = false;
     let availableTerms = [];
     let termsAccountId = '';
     let termsLoadSequence = 0;
@@ -2038,6 +2223,94 @@
       sectionCancel.disabled = false;
     }
 
+    function resetCloneAnalysis({ keepStatus = false } = {}) {
+      cloneAnalysisPlan = null;
+      cloneExecutionPlan = null;
+      cloneAnalysis.hidden = true;
+      cloneRoleSelector.hidden = true;
+      cloneRoleOptions.replaceChildren();
+      clonePrepare.hidden = true;
+      clonePrepare.disabled = true;
+      cloneConfirmation.hidden = true;
+      cloneContinue.disabled = false;
+      cloneCancel.disabled = false;
+      if (!keepStatus) cloneStatus.hidden = true;
+    }
+
+    function selectedCloneRoleKeys() {
+      return new Set(Array.from(
+        cloneRoleOptions.querySelectorAll('.role-checkbox:checked'),
+        checkbox => checkbox.value
+      ));
+    }
+
+    function refreshCloneAvailability() {
+      const hasCsv = Boolean(courseCsvScope?.rows.length);
+      const destinationIsValid = /^\d+$/.test(courseContextInput.value.trim());
+      const holdingIsValid = /^\d+$/.test(cloneHoldingCourseInput.value.trim());
+      cloneSourceSectionColumn.disabled = courseScopeLocked || !hasCsv;
+      cloneSourceSectionIdType.disabled = courseScopeLocked || !hasCsv;
+      cloneHoldingCourseInput.disabled = courseScopeLocked;
+      cloneLimitStudents.disabled = courseScopeLocked;
+      courseCsvFileInput.disabled = courseScopeLocked;
+      cloneAnalyze.disabled = courseScopeLocked || cloneRunning || !hasCsv ||
+        !cloneSourceSectionColumn.value || !destinationIsValid || !holdingIsValid;
+      if (!clonePrepare.hidden) {
+        clonePrepare.disabled = courseScopeLocked || cloneRunning || (
+          Boolean(cloneAnalysisPlan?.roles.length) && !selectedCloneRoleKeys().size
+        );
+      }
+    }
+
+    function setCourseScopeLocked(isLocked) {
+      courseScopeLocked = isLocked;
+      courseContextInput.disabled = isLocked;
+      refreshCloneAvailability();
+      for (const checkbox of cloneRoleOptions.querySelectorAll('.role-checkbox')) {
+        checkbox.disabled = isLocked;
+      }
+    }
+
+    async function loadCourseCsvScope(file) {
+      resetCloneAnalysis();
+      courseCsvScope = null;
+
+      if (!file) {
+        courseCsvStatus.classList.remove('is-error');
+        courseCsvStatus.textContent =
+          'Upload the source-section file; each course action will ask for the columns it needs.';
+        refreshCloneAvailability();
+        return;
+      }
+
+      if (file.size > 25 * 1024 * 1024) {
+        courseCsvStatus.classList.add('is-error');
+        courseCsvStatus.textContent = 'The CSV is larger than the 25 MB safety limit.';
+        refreshCloneAvailability();
+        return;
+      }
+
+      courseCsvStatus.classList.remove('is-error');
+      courseCsvStatus.textContent = `Reading ${file.name}…`;
+      try {
+        const parsed = parseCsvText(await file.text());
+        if (!parsed.rows.length) throw new Error('The CSV has headers but no data rows.');
+        courseCsvScope = {
+          fileName: file.name,
+          headers: parsed.headers,
+          rows: parsed.rows
+        };
+        populateColumnSelect(cloneSourceSectionColumn, parsed.headers);
+        courseCsvStatus.textContent =
+          `${file.name}: ${parsed.rows.length} data row(s), ${parsed.headers.length} column(s).`;
+      } catch (error) {
+        console.error('Canvas Admin Tool Drawer could not parse the course CSV.', error);
+        courseCsvStatus.classList.add('is-error');
+        courseCsvStatus.textContent = `CSV could not be used: ${error.message}`;
+      }
+      refreshCloneAvailability();
+    }
+
     function refreshCsvActionAvailability() {
       const hasCsv = Boolean(csvScope?.rows.length);
       csvCourseColumn.disabled = adminScopeLocked || !hasCsv;
@@ -2184,6 +2457,25 @@
 
     adminContextInput.addEventListener('input', scheduleTermsLoad);
     csvFileInput.addEventListener('change', () => loadCsvScope(csvFileInput.files?.[0]));
+    courseCsvFileInput.addEventListener('change', () => loadCourseCsvScope(courseCsvFileInput.files?.[0]));
+    for (const input of [courseContextInput, cloneHoldingCourseInput]) {
+      input.addEventListener('input', () => {
+        resetCloneAnalysis();
+        refreshCloneAvailability();
+      });
+    }
+    for (const select of [cloneSourceSectionColumn, cloneSourceSectionIdType]) {
+      select.addEventListener('change', () => {
+        resetCloneAnalysis();
+        refreshCloneAvailability();
+      });
+    }
+    cloneLimitStudents.addEventListener('change', () => {
+      cloneExecutionPlan = null;
+      cloneConfirmation.hidden = true;
+      cloneContinue.disabled = false;
+      cloneCancel.disabled = false;
+    });
     for (const select of [
       csvCourseColumn,
       csvCourseIdType,
@@ -2429,7 +2721,7 @@
 
     navigationReportTrigger.addEventListener('click', () => {
       if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
-        pendingSectionScope || enableNavigationRunning) return;
+        pendingSectionScope || enableNavigationRunning || cloneRunning || cloneExecutionPlan) return;
 
       const accountId = adminContextInput.value.trim();
       if (!/^\d+$/.test(accountId)) {
@@ -2751,7 +3043,8 @@
 
     sectionReportTrigger.addEventListener('click', () => {
       if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
-        pendingSectionScope || enableNavigationRunning || !csvScope) return;
+        pendingSectionScope || enableNavigationRunning || cloneRunning || cloneExecutionPlan ||
+        !csvScope) return;
 
       const classNumberColumn = sectionClassNumberColumn.value;
       if (!classNumberColumn) {
@@ -2873,7 +3166,8 @@
     }
 
     async function analyzeEnableNavigation() {
-      if (enableNavigationRunning || navigationReportRunning || sectionReportRunning || !csvScope) return;
+      if (enableNavigationRunning || navigationReportRunning || sectionReportRunning || cloneRunning ||
+        cloneExecutionPlan || !csvScope) return;
 
       const courseColumn = csvCourseColumn.value;
       const toolColumn = enableNavigationToolColumn.value;
@@ -3165,6 +3459,806 @@
     });
 
     enableNavigationContinue.addEventListener('click', executeEnableNavigation);
+
+    function showCloneStatus(message, { isError = false } = {}) {
+      cloneStatus.hidden = false;
+      cloneStatus.classList.toggle('is-error', isError);
+      cloneStatusText.textContent = message;
+    }
+
+    function cloneEnrollmentPath(sectionId) {
+      const params = new URLSearchParams({ per_page: '100' });
+      params.append('state[]', 'active');
+      params.append('state[]', 'invited');
+      return `/api/v1/sections/${encodeURIComponent(String(sectionId))}/enrollments?${params.toString()}`;
+    }
+
+    function cloneRoleDefinitions(entries) {
+      const definitions = new Map();
+      for (const entry of entries) {
+        for (const [location, enrollments] of [
+          ['source', entry.sourceEnrollments || []],
+          ['clone', entry.cloneEnrollments || []]
+        ]) {
+          for (const enrollment of enrollments) {
+            const key = enrollmentRoleKey(enrollment);
+            const definition = definitions.get(key) || {
+              key,
+              type: enrollment.type || '',
+              roleId: enrollment.role_id || '',
+              label: enrollment.role || enrollment.type || 'Unknown role',
+              sourceCount: 0,
+              cloneCount: 0,
+              active: 0,
+              invited: 0
+            };
+            if (location === 'source') {
+              definition.sourceCount++;
+              if (enrollment.enrollment_state === 'active') definition.active++;
+              if (enrollment.enrollment_state === 'invited') definition.invited++;
+            } else {
+              definition.cloneCount++;
+            }
+            definitions.set(key, definition);
+          }
+        }
+      }
+      return Array.from(definitions.values()).sort((left, right) => (
+        left.type.localeCompare(right.type) || left.label.localeCompare(right.label)
+      ));
+    }
+
+    function renderCloneRoleOptions(roles) {
+      cloneRoleOptions.replaceChildren();
+      for (const role of roles) {
+        const label = document.createElement('label');
+        label.className = 'role-option';
+        const checkbox = document.createElement('input');
+        checkbox.className = 'role-checkbox';
+        checkbox.type = 'checkbox';
+        checkbox.value = role.key;
+        checkbox.checked = role.type === 'StudentEnrollment';
+        const text = document.createElement('span');
+        const roleDetails = role.label === role.type
+          ? role.label
+          : `${role.label} (${role.type})`;
+        text.textContent = `${roleDetails} `;
+        const count = document.createElement('span');
+        count.className = 'role-count';
+        count.textContent = `${role.sourceCount} source (${role.active} active, ` +
+          `${role.invited} invited); ${role.cloneCount} currently in managed clones`;
+        text.appendChild(count);
+        label.append(checkbox, text);
+        cloneRoleOptions.appendChild(label);
+        checkbox.addEventListener('change', () => {
+          cloneExecutionPlan = null;
+          cloneConfirmation.hidden = true;
+          clonePrepare.disabled = roles.length > 0 && !selectedCloneRoleKeys().size;
+        });
+      }
+      cloneRoleSelector.hidden = roles.length === 0;
+      clonePrepare.hidden = false;
+      clonePrepare.disabled = roles.length > 0 && !selectedCloneRoleKeys().size;
+    }
+
+    function classifyClone(entry, destinationSections, holdingSections, holdingCourseId) {
+      const sourceId = String(entry.sourceSection.id);
+      const destinationMatches = destinationSections.filter(section => (
+        cloneSourceSectionId(section.name) === sourceId
+      ));
+      const holdingMatches = holdingSections.filter(section => (
+        cloneSourceSectionId(section.name) === sourceId
+      ));
+      const validDestination = destinationMatches.filter(section => (
+        String(section.nonxlist_course_id || '') === holdingCourseId
+      ));
+      const invalidDestination = destinationMatches.filter(section => (
+        String(section.nonxlist_course_id || '') !== holdingCourseId
+      ));
+
+      if (invalidDestination.length || validDestination.length + holdingMatches.length > 1) {
+        entry.cloneState = 'ambiguous';
+        entry.status = 'ambiguous_clone';
+        entry.error = invalidDestination.length
+          ? 'A matching source marker exists in the destination but was not cross-listed from the selected holding course.'
+          : 'More than one matching clone exists across the destination and holding courses.';
+        return;
+      }
+      if (validDestination.length === 1) {
+        entry.cloneState = 'existing';
+        entry.cloneSection = validDestination[0];
+        return;
+      }
+      if (holdingMatches.length === 1) {
+        entry.cloneState = 'resumable';
+        entry.cloneSection = holdingMatches[0];
+        return;
+      }
+      entry.cloneState = 'new';
+      entry.cloneSection = null;
+    }
+
+    function cloneAnalysisSummary(entries) {
+      const uniqueEntries = entries.filter(entry => entry.status !== 'duplicate_source');
+      const count = state => uniqueEntries.filter(entry => entry.cloneState === state).length;
+      const errors = uniqueEntries.filter(entry => entry.status && entry.status !== 'ready').length;
+      const enrollments = uniqueEntries.reduce(
+        (total, entry) => total + (entry.sourceEnrollments?.length || 0),
+        0
+      );
+      return `${uniqueEntries.length} unique source section(s): ${count('new')} new, ` +
+        `${count('existing')} already in the destination, ${count('resumable')} resumable in the ` +
+        `holding course, ${count('ambiguous')} ambiguous. ${enrollments} active or invited ` +
+        `source enrollment(s) found; ${errors} blocked section(s).`;
+    }
+
+    async function analyzeCloneSections() {
+      if (cloneRunning || navigationReportRunning || sectionReportRunning ||
+        enableNavigationRunning || adminScopeLocked || !courseCsvScope) return;
+
+      const destinationCourseId = courseContextInput.value.trim();
+      const holdingCourseId = cloneHoldingCourseInput.value.trim();
+      const sourceColumn = cloneSourceSectionColumn.value;
+      if (!/^\d+$/.test(destinationCourseId) || !/^\d+$/.test(holdingCourseId) || !sourceColumn) {
+        showCloneStatus('Choose a source section column and enter both numeric course IDs.', {
+          isError: true
+        });
+        return;
+      }
+      if (destinationCourseId === holdingCourseId) {
+        showCloneStatus('The destination and holding-tank courses must be different.', { isError: true });
+        return;
+      }
+
+      cloneRunning = true;
+      resetCloneAnalysis({ keepStatus: true });
+      cloneProgress.removeAttribute('value');
+      cloneProgress.removeAttribute('max');
+      setCourseScopeLocked(true);
+      showCloneStatus('Validating the destination, holding course, and source sections…');
+
+      try {
+        const [destinationResult, holdingResult, destinationSections, holdingSections] =
+          await Promise.all([
+            canvasApi.get(`/api/v1/courses/${encodeURIComponent(destinationCourseId)}`),
+            canvasApi.get(`/api/v1/courses/${encodeURIComponent(holdingCourseId)}`),
+            canvasApi.getAll(
+              `/api/v1/courses/${encodeURIComponent(destinationCourseId)}/sections?per_page=100`
+            ),
+            canvasApi.getAll(
+              `/api/v1/courses/${encodeURIComponent(holdingCourseId)}/sections?per_page=100`
+            )
+          ]);
+        const destinationCourse = destinationResult.data || {};
+        const holdingCourse = holdingResult.data || {};
+        if (String(destinationCourse.root_account_id) !== String(holdingCourse.root_account_id)) {
+          throw new Error('The destination and holding courses are not in the same Canvas root account.');
+        }
+
+        const entries = courseCsvScope.rows.map(row => ({
+          row,
+          sourceValue: String(row[sourceColumn] ?? '').trim(),
+          sourceRef: '',
+          sourceSection: null,
+          sourceEnrollments: [],
+          cloneSection: null,
+          cloneEnrollments: [],
+          cloneState: '',
+          status: '',
+          error: ''
+        }));
+        const firstBySource = new Map();
+        for (const entry of entries) {
+          try {
+            entry.sourceRef = sectionApiIdentifier(
+              entry.sourceValue,
+              cloneSourceSectionIdType.value
+            );
+            if (firstBySource.has(entry.sourceRef)) {
+              entry.status = 'duplicate_source';
+              entry.error = `Duplicates CSV row ${firstBySource.get(entry.sourceRef).row['input.row']}.`;
+            } else {
+              firstBySource.set(entry.sourceRef, entry);
+            }
+          } catch (error) {
+            entry.status = 'invalid_source';
+            entry.error = error.message;
+          }
+        }
+
+        const uniqueEntries = entries.filter(entry => !entry.status);
+        let completed = 0;
+        cloneProgress.max = Math.max(1, uniqueEntries.length);
+        cloneProgress.value = 0;
+        await Promise.all(uniqueEntries.map(async entry => {
+          try {
+            const sectionResult = await canvasApi.get(
+              `/api/v1/sections/${encodeURIComponent(entry.sourceRef)}`
+            );
+            entry.sourceSection = sectionResult.data || {};
+            if (!entry.sourceSection.id) throw new Error('Canvas did not return a source section ID.');
+            entry.sourceEnrollments = await canvasApi.getAll(
+              cloneEnrollmentPath(entry.sourceSection.id)
+            );
+            entry.desiredName = cloneSectionName(entry.sourceSection);
+            classifyClone(entry, destinationSections, holdingSections, holdingCourseId);
+            if (!entry.status) entry.status = 'ready';
+          } catch (error) {
+            entry.status = 'source_error';
+            entry.error = error.message;
+          } finally {
+            completed++;
+            cloneProgress.value = completed;
+            showCloneStatus(`Reading source sections: ${completed} of ${uniqueEntries.length}.`);
+          }
+        }));
+
+        const clonesToRead = uniqueEntries.filter(entry => (
+          entry.status === 'ready' && entry.cloneSection?.id
+        ));
+        let cloneReads = 0;
+        cloneProgress.max = Math.max(1, clonesToRead.length);
+        cloneProgress.value = 0;
+        await Promise.all(clonesToRead.map(async entry => {
+          try {
+            entry.cloneEnrollments = await canvasApi.getAll(
+              cloneEnrollmentPath(entry.cloneSection.id)
+            );
+          } catch (error) {
+            entry.status = 'clone_error';
+            entry.error = error.message;
+          } finally {
+            cloneReads++;
+            cloneProgress.value = cloneReads;
+            showCloneStatus(`Reading existing clones: ${cloneReads} of ${clonesToRead.length}.`);
+          }
+        }));
+
+        const roles = cloneRoleDefinitions(entries.filter(entry => entry.status === 'ready'));
+        cloneAnalysisPlan = {
+          sourceFileName: courseCsvScope.fileName,
+          sourceHeaders: [...courseCsvScope.headers],
+          destinationCourse,
+          holdingCourse,
+          destinationCourseId,
+          holdingCourseId,
+          sourceColumn,
+          sourceIdType: cloneSourceSectionIdType.value,
+          entries,
+          roles
+        };
+        cloneAnalysisText.textContent = cloneAnalysisSummary(entries);
+        cloneAnalysis.hidden = false;
+        renderCloneRoleOptions(roles);
+        showCloneStatus('Read-only analysis complete. Select the roles to synchronize.');
+      } catch (error) {
+        console.error('Section clone analysis failed.', error);
+        resetCloneAnalysis({ keepStatus: true });
+        cloneProgress.removeAttribute('value');
+        cloneProgress.removeAttribute('max');
+        showCloneStatus(`Analysis stopped: ${error.message}`, { isError: true });
+      } finally {
+        cloneRunning = false;
+        setCourseScopeLocked(false);
+        refreshCloneAvailability();
+      }
+    }
+
+    function buildCloneExecutionPlan() {
+      if (!cloneAnalysisPlan) return null;
+      const selectedRoles = selectedCloneRoleKeys();
+      if (cloneAnalysisPlan.roles.length && !selectedRoles.size) return null;
+
+      const entries = cloneAnalysisPlan.entries.map(entry => {
+        if (entry.status !== 'ready') {
+          return { ...entry, adds: [], updates: [], removals: [], unchanged: [] };
+        }
+        const desiredByIdentity = new Map();
+        for (const enrollment of entry.sourceEnrollments) {
+          if (!selectedRoles.has(enrollmentRoleKey(enrollment))) continue;
+          desiredByIdentity.set(enrollmentIdentityKey(enrollment), enrollment);
+        }
+        const actualByIdentity = new Map();
+        for (const enrollment of entry.cloneEnrollments) {
+          if (!selectedRoles.has(enrollmentRoleKey(enrollment))) continue;
+          actualByIdentity.set(enrollmentIdentityKey(enrollment), enrollment);
+        }
+        const adds = [];
+        const updates = [];
+        const removals = [];
+        const unchanged = [];
+        for (const [identity, enrollment] of desiredByIdentity) {
+          if (!actualByIdentity.has(identity)) {
+            adds.push(enrollment);
+            continue;
+          }
+          const cloneEnrollment = actualByIdentity.get(identity);
+          const studentLimitDiffers = enrollment.type === 'StudentEnrollment' &&
+            Boolean(cloneEnrollment.limit_privileges_to_course_section) !== cloneLimitStudents.checked;
+          const pair = { source: enrollment, clone: cloneEnrollment };
+          if (studentLimitDiffers) updates.push(pair);
+          else unchanged.push(pair);
+        }
+        for (const [identity, enrollment] of actualByIdentity) {
+          if (!desiredByIdentity.has(identity)) removals.push(enrollment);
+        }
+        return {
+          ...entry,
+          adds,
+          updates,
+          removals,
+          unchanged,
+          rename: Boolean(entry.cloneSection && entry.cloneSection.name !== entry.desiredName)
+        };
+      });
+      return {
+        ...cloneAnalysisPlan,
+        selectedRoles,
+        limitStudents: cloneLimitStudents.checked,
+        entries
+      };
+    }
+
+    function cloneExecutionCounts(plan) {
+      const ready = plan.entries.filter(entry => entry.status === 'ready');
+      return {
+        ready: ready.length,
+        newSections: ready.filter(entry => entry.cloneState === 'new').length,
+        resumedSections: ready.filter(entry => entry.cloneState === 'resumable').length,
+        existingSections: ready.filter(entry => entry.cloneState === 'existing').length,
+        renamedSections: ready.filter(entry => entry.rename).length,
+        adds: ready.reduce((total, entry) => total + entry.adds.length, 0),
+        updates: ready.reduce((total, entry) => total + entry.updates.length, 0),
+        removals: ready.reduce((total, entry) => total + entry.removals.length, 0),
+        unchanged: ready.reduce((total, entry) => total + entry.unchanged.length, 0),
+        blocked: plan.entries.filter(entry => entry.status !== 'ready').length
+      };
+    }
+
+    function prepareCloneExecution() {
+      const plan = buildCloneExecutionPlan();
+      if (!plan) {
+        showCloneStatus('Select at least one enrollment role before preparing the sync.', {
+          isError: true
+        });
+        return;
+      }
+      const counts = cloneExecutionCounts(plan);
+      if (!counts.ready) {
+        showCloneStatus('No unambiguous source sections are available to synchronize.', {
+          isError: true
+        });
+        return;
+      }
+      cloneExecutionPlan = plan;
+      const removalWarning = counts.removals
+        ? ` ${counts.removals} enrollment(s) will be deleted from managed clone sections.`
+        : '';
+      cloneConfirmationText.textContent =
+        `Synchronize ${counts.ready} section(s) into course ${plan.destinationCourseId}: ` +
+        `${counts.newSections} new, ${counts.resumedSections} resumed, ${counts.existingSections} ` +
+        `already in the destination; ${counts.adds} enrollment(s) added, ${counts.updates} student ` +
+        `section-limit setting(s) updated, ${counts.removals} removed, ` +
+        `${counts.unchanged} unchanged, ${counts.renamedSections} section name update(s), and ` +
+        `${counts.blocked} blocked CSV row(s). Notifications will not be sent.${removalWarning} ` +
+        `API-created enrollments are not SIS-managed.`;
+      cloneConfirmation.hidden = false;
+      setCourseScopeLocked(true);
+      cloneContinue.focus();
+    }
+
+    cloneAnalyze.addEventListener('click', analyzeCloneSections);
+    clonePrepare.addEventListener('click', prepareCloneExecution);
+
+    function cloneResultRow(plan, entry, {
+      action,
+      status,
+      error = '',
+      enrollment = null,
+      cloneSection = entry.cloneSection
+    }) {
+      const source = entry.sourceSection || {};
+      const enrollmentData = enrollment || {};
+      return {
+        ...entry.row,
+        'scope.destination_course_id': plan.destinationCourseId,
+        'scope.holding_course_id': plan.holdingCourseId,
+        'scope.limit_students_to_section': plan.limitStudents,
+        'src.id': source.id ?? '',
+        'src.sis_section_id': source.sis_section_id ?? '',
+        'src.integration_id': source.integration_id ?? '',
+        'src.name': source.name ?? '',
+        'src.course_id': source.course_id ?? '',
+        'clone.id': cloneSection?.id ?? '',
+        'clone.sis_section_id': cloneSection?.sis_section_id ?? '',
+        'clone.integration_id': cloneSection?.integration_id ?? '',
+        'clone.name': cloneSection?.name ?? entry.desiredName ?? '',
+        'clone.course_id': cloneSection?.course_id ?? '',
+        'clone.nonxlist_course_id': cloneSection?.nonxlist_course_id ?? '',
+        'enrollment.id': enrollmentData.id ?? '',
+        'enrollment.user_id': enrollmentData.user_id ?? '',
+        'enrollment.type': enrollmentData.type ?? '',
+        'enrollment.role': enrollmentData.role ?? '',
+        'enrollment.role_id': enrollmentData.role_id ?? '',
+        'enrollment.enrollment_state': enrollmentData.enrollment_state ?? '',
+        'enrollment.associated_user_id': enrollmentData.associated_user_id ?? '',
+        'enrollment.limit_privileges_to_course_section':
+          enrollmentData.limit_privileges_to_course_section ?? '',
+        'run.action': action,
+        'run.completed_at': new Date().toISOString(),
+        'run.status': status,
+        'run.error': error
+      };
+    }
+
+    function cloneEnrollmentRequestBody(enrollment, limitStudents) {
+      const body = {
+        'enrollment[user_id]': enrollment.user_id,
+        'enrollment[type]': enrollment.type,
+        'enrollment[role_id]': enrollment.role_id,
+        'enrollment[enrollment_state]': enrollment.enrollment_state,
+        'enrollment[notify]': 'false'
+      };
+      if (enrollment.type === 'StudentEnrollment') {
+        body['enrollment[limit_privileges_to_course_section]'] = String(limitStudents);
+      }
+      if (enrollment.type === 'ObserverEnrollment' && enrollment.associated_user_id) {
+        body['enrollment[associated_user_id]'] = enrollment.associated_user_id;
+      }
+      return body;
+    }
+
+    async function addCloneEnrollments(plan, entry, enrollments, resultRows) {
+      let failed = 0;
+      const groups = [
+        enrollments.filter(enrollment => enrollment.type === 'StudentEnrollment'),
+        enrollments.filter(enrollment => enrollment.type !== 'StudentEnrollment')
+      ];
+      for (const group of groups) {
+        await Promise.all(group.map(async enrollment => {
+          try {
+            const result = await canvasApi.request(
+              `/api/v1/sections/${encodeURIComponent(String(entry.cloneSection.id))}/enrollments`,
+              {
+                method: 'POST',
+                body: cloneEnrollmentRequestBody(enrollment, plan.limitStudents)
+              }
+            );
+            resultRows.push(cloneResultRow(plan, entry, {
+              action: 'add_clone_enrollment',
+              status: 'added',
+              enrollment: result.data || enrollment
+            }));
+          } catch (error) {
+            failed++;
+            resultRows.push(cloneResultRow(plan, entry, {
+              action: 'add_clone_enrollment',
+              status: 'add_error',
+              error: error.message,
+              enrollment
+            }));
+          }
+        }));
+        if (failed) break;
+      }
+      return failed;
+    }
+
+    async function updateCloneEnrollmentLimits(plan, entry, pairs, resultRows) {
+      let failed = 0;
+      await Promise.all(pairs.map(async pair => {
+        try {
+          const result = await canvasApi.request(
+            `/api/v1/sections/${encodeURIComponent(String(entry.cloneSection.id))}/enrollments`,
+            {
+              method: 'POST',
+              body: cloneEnrollmentRequestBody(pair.source, plan.limitStudents)
+            }
+          );
+          const updated = result.data || pair.clone;
+          if (Boolean(updated.limit_privileges_to_course_section) !== plan.limitStudents) {
+            throw new Error('Canvas did not retain the requested student section-limit setting.');
+          }
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'update_clone_enrollment',
+            status: 'updated',
+            enrollment: updated
+          }));
+        } catch (error) {
+          failed++;
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'update_clone_enrollment',
+            status: 'update_error',
+            error: error.message,
+            enrollment: pair.clone
+          }));
+        }
+      }));
+      return failed;
+    }
+
+    async function removeCloneEnrollments(plan, entry, enrollments, currentCourseId, resultRows) {
+      let failed = 0;
+      await Promise.all(enrollments.map(async enrollment => {
+        try {
+          await canvasApi.request(
+            `/api/v1/courses/${encodeURIComponent(String(currentCourseId))}/enrollments/` +
+            `${encodeURIComponent(String(enrollment.id))}`,
+            { method: 'DELETE', body: { task: 'delete' } }
+          );
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'remove_clone_enrollment',
+            status: 'removed',
+            enrollment
+          }));
+        } catch (error) {
+          failed++;
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'remove_clone_enrollment',
+            status: 'remove_error',
+            error: error.message,
+            enrollment
+          }));
+        }
+      }));
+      return failed;
+    }
+
+    async function executeCloneEntry(plan, entry, resultRows) {
+      if (entry.status !== 'ready') {
+        resultRows.push(cloneResultRow(plan, entry, {
+          action: 'sync_section_clone',
+          status: entry.status,
+          error: entry.error
+        }));
+        return { succeeded: false, failed: true };
+      }
+
+      const startedState = entry.cloneState;
+      let currentCourseId = startedState === 'existing'
+        ? plan.destinationCourseId
+        : plan.holdingCourseId;
+      let operationErrors = 0;
+
+      if (startedState === 'new') {
+        try {
+          const result = await canvasApi.request(
+            `/api/v1/courses/${encodeURIComponent(plan.holdingCourseId)}/sections`,
+            { method: 'POST', body: { 'course_section[name]': entry.desiredName } }
+          );
+          entry.cloneSection = result.data || {};
+          if (!entry.cloneSection.id) throw new Error('Canvas did not return the cloned section ID.');
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'create_clone_section',
+            status: 'created'
+          }));
+        } catch (error) {
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'create_clone_section',
+            status: 'create_error',
+            error: error.message
+          }));
+          return { succeeded: false, failed: true };
+        }
+      } else if (entry.rename) {
+        try {
+          const result = await canvasApi.request(
+            `/api/v1/sections/${encodeURIComponent(String(entry.cloneSection.id))}`,
+            { method: 'PUT', body: { 'course_section[name]': entry.desiredName } }
+          );
+          entry.cloneSection = result.data || entry.cloneSection;
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'rename_clone_section',
+            status: 'renamed'
+          }));
+        } catch (error) {
+          operationErrors++;
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'rename_clone_section',
+            status: 'rename_error',
+            error: error.message
+          }));
+        }
+      }
+
+      for (const pair of entry.unchanged) {
+        resultRows.push(cloneResultRow(plan, entry, {
+          action: 'sync_clone_enrollment',
+          status: 'unchanged',
+          enrollment: pair.clone
+        }));
+      }
+
+      const addErrors = await addCloneEnrollments(plan, entry, entry.adds, resultRows);
+      operationErrors += addErrors;
+      if (addErrors) {
+        for (const pair of entry.updates) {
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'update_clone_enrollment',
+            status: 'skipped_after_add_error',
+            enrollment: pair.clone
+          }));
+        }
+      }
+      const updateErrors = addErrors
+        ? 0
+        : await updateCloneEnrollmentLimits(plan, entry, entry.updates, resultRows);
+      operationErrors += updateErrors;
+      let removeErrors = 0;
+      if (!addErrors && !updateErrors) {
+        removeErrors = await removeCloneEnrollments(
+          plan,
+          entry,
+          entry.removals,
+          currentCourseId,
+          resultRows
+        );
+        operationErrors += removeErrors;
+      } else {
+        for (const enrollment of entry.removals) {
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'remove_clone_enrollment',
+            status: 'skipped_after_prerequisite_error',
+            enrollment
+          }));
+        }
+      }
+
+      if (startedState !== 'existing') {
+        if (operationErrors) {
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'crosslist_clone_section',
+            status: 'skipped_in_holding',
+            error: 'The clone remains in the holding course because one or more prerequisite operations failed.'
+          }));
+          return { succeeded: false, failed: true };
+        }
+        try {
+          const result = await canvasApi.request(
+            `/api/v1/sections/${encodeURIComponent(String(entry.cloneSection.id))}/crosslist/` +
+            `${encodeURIComponent(plan.destinationCourseId)}`,
+            { method: 'POST', body: {} }
+          );
+          entry.cloneSection = result.data || entry.cloneSection;
+          currentCourseId = plan.destinationCourseId;
+          const originMatches = String(entry.cloneSection.nonxlist_course_id || '') ===
+            plan.holdingCourseId;
+          const destinationMatches = String(entry.cloneSection.course_id || '') ===
+            plan.destinationCourseId;
+          if (!originMatches || !destinationMatches) {
+            throw new Error('Canvas cross-listed the section but returned an unexpected course or origin.');
+          }
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'crosslist_clone_section',
+            status: 'crosslisted'
+          }));
+        } catch (error) {
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'crosslist_clone_section',
+            status: 'crosslist_error',
+            error: error.message
+          }));
+          return { succeeded: false, failed: true };
+        }
+      }
+
+      const finalStatus = operationErrors
+        ? 'partial_sync'
+        : (
+          startedState === 'existing' && !entry.rename && !entry.adds.length &&
+            !entry.updates.length && !entry.removals.length
+            ? 'already_synced'
+            : 'synced'
+        );
+      resultRows.push(cloneResultRow(plan, entry, {
+        action: 'sync_section_clone',
+        status: finalStatus,
+        error: operationErrors ? `${operationErrors} operation(s) failed.` : ''
+      }));
+      return { succeeded: !operationErrors, failed: Boolean(operationErrors) };
+    }
+
+    function downloadCloneResults(plan, rows) {
+      const generatedColumns = [
+        'input.row',
+        'scope.destination_course_id',
+        'scope.holding_course_id',
+        'scope.limit_students_to_section',
+        'src.id',
+        'src.sis_section_id',
+        'src.integration_id',
+        'src.name',
+        'src.course_id',
+        'clone.id',
+        'clone.sis_section_id',
+        'clone.integration_id',
+        'clone.name',
+        'clone.course_id',
+        'clone.nonxlist_course_id',
+        'enrollment.id',
+        'enrollment.user_id',
+        'enrollment.type',
+        'enrollment.role',
+        'enrollment.role_id',
+        'enrollment.enrollment_state',
+        'enrollment.associated_user_id',
+        'enrollment.limit_privileges_to_course_section',
+        'run.action',
+        'run.completed_at',
+        'run.status',
+        'run.error'
+      ];
+      const columnNames = [...plan.sourceHeaders];
+      for (const key of generatedColumns) {
+        if (!columnNames.includes(key)) columnNames.push(key);
+      }
+      downloadCsv({
+        rows,
+        columns: columnNames.map(key => ({ key, label: key })),
+        filename: `sec-sync.course-${plan.destinationCourseId}.${timestampForFilename()}.csv`
+      });
+    }
+
+    async function executeCloneSync() {
+      if (!cloneExecutionPlan || cloneRunning) return;
+      cloneRunning = true;
+      cloneConfirmation.hidden = true;
+      cloneContinue.disabled = true;
+      cloneCancel.disabled = true;
+      const plan = cloneExecutionPlan;
+      const resultRows = [];
+      let completed = 0;
+      let succeeded = 0;
+      let failed = 0;
+      cloneProgress.max = Math.max(1, plan.entries.length);
+      cloneProgress.value = 0;
+      showCloneStatus(`Synchronizing sections: 0 of ${plan.entries.length}.`);
+
+      try {
+        for (const entry of plan.entries) {
+          const result = await executeCloneEntry(plan, entry, resultRows);
+          if (result.succeeded) succeeded++;
+          if (result.failed) failed++;
+          completed++;
+          cloneProgress.value = completed;
+          const apiState = canvasApi.state();
+          const rateText = apiState.rateRemaining === null
+            ? ''
+            : ` Canvas quota remaining: ${apiState.rateRemaining}.`;
+          showCloneStatus(
+            `Synchronizing sections: ${completed} of ${plan.entries.length}. ` +
+            `Succeeded: ${succeeded}. Blocked or failed: ${failed}.${rateText}`,
+            { isError: failed > 0 }
+          );
+        }
+        downloadCloneResults(plan, resultRows);
+        showCloneStatus(
+          `Complete. ${succeeded} section(s) synchronized; ${failed} blocked or failed. ` +
+          `Results CSV downloaded. Any incomplete new clone remains in holding course ` +
+          `${plan.holdingCourseId} for a safe rerun.`,
+          { isError: failed > 0 }
+        );
+      } catch (error) {
+        console.error('Section clone sync failed.', error);
+        if (resultRows.length) downloadCloneResults(plan, resultRows);
+        showCloneStatus(`Action stopped: ${error.message}`, { isError: true });
+      } finally {
+        cloneRunning = false;
+        resetCloneAnalysis({ keepStatus: true });
+        setCourseScopeLocked(false);
+        refreshCloneAvailability();
+      }
+    }
+
+    cloneCancel.addEventListener('click', () => {
+      if (cloneRunning) return;
+      cloneExecutionPlan = null;
+      cloneConfirmation.hidden = true;
+      setCourseScopeLocked(false);
+      refreshCloneAvailability();
+      clonePrepare.focus();
+    });
+    cloneContinue.addEventListener('click', executeCloneSync);
 
     function setOpen(isOpen) {
       shell.classList.toggle('is-open', isOpen);

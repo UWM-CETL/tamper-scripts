@@ -29,7 +29,8 @@ therefore means all terms used in that selected scope, not every consortium term
 ordered by `start_at` within each group.
 
 Course tools are nested action accordions. This keeps each action's mappings, analysis, confirmation,
-progress, and results separate while allowing the shared account and CSV scopes to be reused.
+progress, and results separate. Admin and Course contexts have independent CSV scopes so a field
+mapping is always owned by the action that consumes it.
 
 ### Course navigation links report
 
@@ -120,6 +121,43 @@ After execution, a results CSV preserves the source columns and adds the returne
 `set_navigation_hidden`; status values distinguish shown and hidden results. The shared scheduler
 applies the same concurrency, quota, retry, and backoff controls used by reports.
 
+### Clone or sync sections
+
+Under **Course → Clone or sync sections**, the current Course context is the destination. The Course
+CSV supplies source sections through an explicitly selected Canvas-section-ID or SIS-section-ID
+column. A holding-tank Canvas course ID is required. The read-only analysis resolves every unique
+source section, loads all active and invited section enrollments with common pagination, validates the
+destination and holding courses, and discovers the exact Canvas enrollment roles present in the
+source or an existing managed clone. Student-based roles are selected by default; custom roles retain
+their Canvas `role_id`.
+
+A managed clone has the canonical visible name
+`<source section name> - Copy [src <source Canvas section ID>]`. The script positively identifies it
+with both the exact final marker and its Canvas cross-list origin (`nonxlist_course_id`) matching the
+selected holding course. It never adopts a name-only match from another origin. No match means a new
+clone; a single match in the destination is synchronized in place; and a single match still in the
+holding course resumes an interrupted run. Multiple or conflicting matches are blocked without a
+write. Source SIS IDs, integration IDs, and dates are intentionally not copied.
+
+For the selected roles, enrollment identity is the combination of `user_id`, `type`, `role_id`, and
+`associated_user_id`. Missing enrollments are added, stale enrollments in the managed clone are
+deleted, and exact matches are left untouched. Student additions use
+`limit_privileges_to_course_section=true` by default; the checkbox can disable it. Observer additions
+retain `associated_user_id`, active or invited state is preserved for new enrollments, and
+notifications are explicitly disabled. Existing student enrollments whose section-limit setting does
+not match the checkbox are updated and verified before removals or cross-listing continue. Roles not
+selected for the run are never removed.
+
+New sections are created in the holding course and students are added before other selected roles.
+Stale enrollments are removed only after every addition for that section succeeds. The section is
+cross-listed only after all prerequisite enrollment operations succeed. Existing destination clones
+are updated directly. Sections run sequentially while enrollment requests use the shared 15-request
+scheduler. A partial new clone remains in the holding course, where the next analysis recognizes and
+resumes it. The results CSV uses the compact filename
+`sec-sync.course-<destination-course-id>.<timestamp>.csv`, preserves every input column, and adds
+`src.*`, `clone.*`, `enrollment.*`, `scope.*`, and `run.*` fields. API-created enrollments are not
+SIS-managed records.
+
 The icon is only added when the current Canvas user can view at least one account through Canvas's
 Accounts API. Canvas normally returns an empty account list for students and teachers. The result is
 cached in the current browser tab for 15 minutes so normal Canvas navigation does not repeat the
@@ -166,9 +204,11 @@ future reports so source fields remain recognizable and reusable without another
 3. Confirm or enter the Canvas ID in the relevant Admin, Course, or Page accordion.
 4. For the navigation report, open **Admin → Courses → Get all navigation links**, select the term
    scope and whether to limit the scope to published courses, and prepare the report.
-5. For a CSV-driven action, upload the CSV in the Admin scope, map its course ID column, then open the
-   action accordion and provide the action-specific column mappings.
-6. Close the drawer with its close button, the shaded page backdrop, or the Escape key.
+5. For an Admin CSV action, upload the CSV in the Admin scope and provide the mappings inside that
+   action's accordion.
+6. For section cloning, open the destination course, upload the source-section CSV in the Course
+   context, then map the source section column and enter the holding course ID.
+7. Close the drawer with its close button, the shaded page backdrop, or the Escape key.
 
 Data-changing tools always require a read-only analysis followed by an explicit confirmation.
 
