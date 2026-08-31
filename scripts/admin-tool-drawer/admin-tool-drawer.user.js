@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.2.0
+// @version      0.3.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -14,7 +14,16 @@
   const CONFIG = {
     adminCacheKey: 'uwm-canvas-admin-tool-drawer:is-admin:v1',
     adminCacheTtlMs: 15 * 60 * 1000,
-    failedCheckCacheTtlMs: 60 * 1000
+    failedCheckCacheTtlMs: 60 * 1000,
+    api: {
+      maxConcurrency: 15,
+      minimumRateRemaining: 100,
+      lowRatePauseMs: 1500,
+      maxRetries: 5,
+      baseRetryMs: 1000,
+      maxRetryMs: 30000,
+      retryStatuses: [408, 429, 500, 502, 503, 504]
+    }
   };
 
   const HOST_ID = 'uwm-canvas-admin-tool-drawer-host';
@@ -106,25 +115,321 @@
     }
   }
 
+  function sleep(ms) {
+    return new Promise(resolve => window.setTimeout(resolve, ms));
+  }
+
+  function getCsrfToken() {
+    const metaToken = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (metaToken) return metaToken;
+
+    const cookieMatch = document.cookie.match(/(?:^|;\s*)_csrf_token=([^;]+)/);
+    return cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+  }
+
+  function parseNextLink(linkHeader) {
+    if (!linkHeader) return null;
+
+    for (const part of linkHeader.split(',')) {
+      const match = part.match(/<([^>]+)>;\s*rel="next"/);
+      if (match) return match[1];
+    }
+
+    return null;
+  }
+
+  function parseRetryAfterMs(value) {
+    if (!value) return null;
+
+    const seconds = Number(value);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+    const dateMs = Date.parse(value);
+    return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+  }
+
+  function createCanvasApiClient(config) {
+    const queue = [];
+    const telemetry = {
+      active: 0,
+      queued: 0,
+      totalRequests: 0,
+      retries: 0,
+      lastRequestCost: null,
+      rateRemaining: null,
+      pausedUntil: null
+    };
+
+    let pauseUntil = 0;
+    let drainTimer = null;
+
+    function snapshot() {
+      return {
+        ...telemetry,
+        pausedUntil: pauseUntil > Date.now()
+          ? new Date(pauseUntil).toISOString()
+          : null
+      };
+    }
+
+    function scheduleDrain(delayMs = 0) {
+      if (drainTimer !== null) return;
+
+      drainTimer = window.setTimeout(() => {
+        drainTimer = null;
+        drain();
+      }, Math.max(0, delayMs));
+    }
+
+    function pauseAllRequests(delayMs) {
+      if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+
+      pauseUntil = Math.max(pauseUntil, Date.now() + delayMs);
+      telemetry.pausedUntil = new Date(pauseUntil).toISOString();
+      scheduleDrain(pauseUntil - Date.now());
+    }
+
+    function calculateBackoffMs(attempt) {
+      const exponential = Math.min(
+        config.maxRetryMs,
+        config.baseRetryMs * (2 ** attempt)
+      );
+      const jitter = Math.round(exponential * (0.15 + Math.random() * 0.2));
+      return Math.min(config.maxRetryMs, exponential + jitter);
+    }
+
+    function prepareRequest(path, options = {}) {
+      const url = new URL(path, window.location.origin);
+      if (url.origin !== window.location.origin) {
+        throw new Error('Canvas API requests must use the current Canvas origin.');
+      }
+
+      const method = String(options.method || 'GET').toUpperCase();
+      const headers = new Headers(options.headers || {});
+      let body = options.body;
+
+      if (!headers.has('Accept')) {
+        headers.set('Accept', 'application/json+canvas-string-ids');
+      }
+
+      const bodyIsPlainObject = body &&
+        typeof body === 'object' &&
+        !(body instanceof FormData) &&
+        !(body instanceof URLSearchParams) &&
+        !(body instanceof Blob) &&
+        !(body instanceof ArrayBuffer);
+
+      if (bodyIsPlainObject) {
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(body)) {
+          if (value === undefined || value === null) continue;
+
+          if (Array.isArray(value)) {
+            for (const item of value) params.append(key, String(item));
+          } else {
+            params.append(key, String(value));
+          }
+        }
+
+        body = params;
+        headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+      }
+
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers.has('X-CSRF-Token')) {
+        const csrfToken = getCsrfToken();
+        if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+      }
+
+      return {
+        url,
+        method,
+        fetchOptions: {
+          ...options,
+          method,
+          headers,
+          body,
+          credentials: 'same-origin'
+        }
+      };
+    }
+
+    async function parseResponse(response) {
+      const rawText = await response.text();
+      if (!rawText) return { data: null, rawText: '' };
+
+      try {
+        return { data: JSON.parse(rawText), rawText };
+      } catch {
+        return { data: rawText, rawText };
+      }
+    }
+
+    function recordResponse(response) {
+      const requestCostHeader = response.headers.get('X-Request-Cost');
+      const rateRemainingHeader = response.headers.get('X-Rate-Limit-Remaining');
+      const requestCost = requestCostHeader === null ? null : Number(requestCostHeader);
+      const rateRemaining = rateRemainingHeader === null ? null : Number(rateRemainingHeader);
+
+      telemetry.totalRequests++;
+      telemetry.lastRequestCost = Number.isFinite(requestCost) ? requestCost : null;
+      telemetry.rateRemaining = Number.isFinite(rateRemaining) ? rateRemaining : null;
+
+      if (
+        Number.isFinite(rateRemaining) &&
+        rateRemaining <= config.minimumRateRemaining
+      ) {
+        pauseAllRequests(config.lowRatePauseMs);
+      }
+
+      return {
+        requestCost: telemetry.lastRequestCost,
+        rateRemaining: telemetry.rateRemaining
+      };
+    }
+
+    function makeApiError({ method, url, response, data, rawText, rate }) {
+      const details = typeof data === 'string'
+        ? data
+        : JSON.stringify(data, null, 2);
+      const error = new Error(
+        `Canvas API request failed: ${method} ${url.pathname}${url.search}\n\n` +
+        `HTTP ${response.status}\n${details || rawText || response.statusText}`
+      );
+
+      error.status = response.status;
+      error.url = url.href;
+      error.response = data;
+      error.requestCost = rate.requestCost;
+      error.rateRemaining = rate.rateRemaining;
+      return error;
+    }
+
+    async function execute(path, options) {
+      const prepared = prepareRequest(path, options);
+
+      for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+        const globalDelay = pauseUntil - Date.now();
+        if (globalDelay > 0) await sleep(globalDelay);
+
+        let response;
+
+        try {
+          response = await window.fetch(prepared.url.href, prepared.fetchOptions);
+        } catch (error) {
+          if (attempt >= config.maxRetries) throw error;
+
+          telemetry.retries++;
+          await sleep(calculateBackoffMs(attempt));
+          continue;
+        }
+
+        const rate = recordResponse(response);
+        const parsed = await parseResponse(response);
+        const rateLimited = response.status === 429 || (
+          response.status === 403 &&
+          /rate.?limit|throttl/i.test(parsed.rawText)
+        );
+        const retryable = rateLimited || config.retryStatuses.includes(response.status);
+
+        if (response.ok) {
+          return {
+            data: parsed.data,
+            response,
+            status: response.status,
+            requestCost: rate.requestCost,
+            rateRemaining: rate.rateRemaining
+          };
+        }
+
+        if (retryable && attempt < config.maxRetries) {
+          const retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After'));
+          const delayMs = retryAfterMs ?? calculateBackoffMs(attempt);
+
+          telemetry.retries++;
+          if (rateLimited) pauseAllRequests(delayMs);
+          await sleep(delayMs);
+          continue;
+        }
+
+        throw makeApiError({
+          method: prepared.method,
+          url: prepared.url,
+          response,
+          data: parsed.data,
+          rawText: parsed.rawText,
+          rate
+        });
+      }
+
+      throw new Error('Canvas API retry limit exceeded.');
+    }
+
+    function drain() {
+      if (!queue.length || telemetry.active >= config.maxConcurrency) return;
+
+      const globalDelay = pauseUntil - Date.now();
+      if (globalDelay > 0) {
+        scheduleDrain(globalDelay);
+        return;
+      }
+
+      while (queue.length && telemetry.active < config.maxConcurrency) {
+        const task = queue.shift();
+        telemetry.active++;
+        telemetry.queued = queue.length;
+
+        execute(task.path, task.options)
+          .then(task.resolve, task.reject)
+          .finally(() => {
+            telemetry.active--;
+            telemetry.queued = queue.length;
+            drain();
+          });
+      }
+    }
+
+    function request(path, options = {}) {
+      return new Promise((resolve, reject) => {
+        queue.push({ path, options, resolve, reject });
+        telemetry.queued = queue.length;
+        drain();
+      });
+    }
+
+    async function getAll(path, options = {}) {
+      const items = [];
+      let nextUrl = path;
+
+      while (nextUrl) {
+        const result = await request(nextUrl, { ...options, method: 'GET' });
+        if (!Array.isArray(result.data)) {
+          throw new Error(`Expected a paginated array from Canvas API: ${nextUrl}`);
+        }
+
+        items.push(...result.data);
+        nextUrl = parseNextLink(result.response.headers.get('Link'));
+      }
+
+      return items;
+    }
+
+    return {
+      request,
+      get: (path, options = {}) => request(path, { ...options, method: 'GET' }),
+      getAll,
+      state: snapshot
+    };
+  }
+
+  const canvasApi = createCanvasApiClient(CONFIG.api);
+
   async function currentUserIsAccountAdmin() {
     const cachedStatus = readCachedAdminStatus();
     if (cachedStatus !== null) return cachedStatus;
 
     try {
-      const response = await window.fetch('/api/v1/accounts?per_page=1', {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json'
-        },
-        credentials: 'same-origin'
-      });
-
-      if (!response.ok) {
-        cacheAdminStatus(false, CONFIG.failedCheckCacheTtlMs);
-        return false;
-      }
-
-      const accounts = await response.json();
+      const result = await canvasApi.get('/api/v1/accounts?per_page=1');
+      const accounts = result.data;
       const isAdmin = Array.isArray(accounts) && accounts.length > 0;
       cacheAdminStatus(isAdmin);
       return isAdmin;

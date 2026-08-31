@@ -21,6 +21,22 @@ Accounts API. Canvas normally returns an empty account list for students and tea
 cached in the current browser tab for 15 minutes so normal Canvas navigation does not repeat the
 check on every page load.
 
+## Canvas API traffic controls
+
+All REST API work in the drawer goes through one shared request scheduler. It:
+
+* Allows at most 15 Canvas API requests to be active at once.
+* Tracks Canvas's `X-Request-Cost` and `X-Rate-Limit-Remaining` response headers.
+* Briefly pauses new work when the remaining quota reaches the configured safety threshold.
+* Honors `Retry-After` when Canvas supplies it.
+* Retries throttled, timed-out, and transient server responses with exponential backoff and jitter.
+* Stops after five retries and returns a detailed error to the calling tool.
+* Provides a pagination helper that follows Canvas `Link` headers through the same scheduler.
+
+The scheduler also handles same-origin credentials, Canvas CSRF tokens for write operations, form
+encoding, and string-safe Canvas IDs. Future tools should use this shared client rather than calling
+`fetch` directly.
+
 ## Installation
 
 [Install this script](https://uwm-cetl.github.io/tamper-scripts/scripts/admin-tool-drawer/admin-tool-drawer.user.js)
