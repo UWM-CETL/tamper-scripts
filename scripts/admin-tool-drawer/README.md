@@ -80,6 +80,7 @@ filename, and `unpub` records that no published-only filter was applied.
 The optional **CSV input** parses a local CSV in the browser; it does not send the file to a separate
 service. Uploading establishes only the reusable rows and headers. Every field selector and parameter
 mapping belongs to the action that consumes it and is displayed inside that action's accordion.
+Column selectors never choose a field automatically; the user must make every mapping explicitly.
 Duplicate or blank headers are rejected so later field mappings remain unambiguous.
 
 ### Show or hide course navigation

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.11.0
+// @version      0.11.1
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1921,15 +1921,7 @@
       };
     }
 
-    function preferredColumn(headers, candidates) {
-      for (const candidate of candidates) {
-        const exact = headers.find(header => header.toLowerCase() === candidate.toLowerCase());
-        if (exact) return exact;
-      }
-      return '';
-    }
-
-    function populateColumnSelect(select, headers, preferred = []) {
+    function populateColumnSelect(select, headers) {
       select.replaceChildren();
       const placeholder = document.createElement('option');
       placeholder.value = '';
@@ -1943,7 +1935,7 @@
         select.appendChild(option);
       }
 
-      select.value = preferredColumn(headers, preferred);
+      select.value = '';
       select.disabled = false;
     }
 
@@ -2014,23 +2006,19 @@
 
         populateColumnSelect(
           csvCourseColumn,
-          parsed.headers,
-          ['course.id', 'course.sis_course_id', 'id', 'sis_course_id']
+          parsed.headers
         );
         populateColumnSelect(
           sectionClassNumberColumn,
-          parsed.headers,
-          ['Class #', 'class_number', 'match.class_number', 'class number']
+          parsed.headers
         );
         populateColumnSelect(
           enableNavigationToolColumn,
-          parsed.headers,
-          ['tab.id', 'navigation_id', 'tool_id']
+          parsed.headers
         );
         populateColumnSelect(
           enableNavigationValueColumn,
-          parsed.headers,
-          ['tab.hidden', 'hidden', 'new_hidden', 'new_value']
+          parsed.headers
         );
 
         if (/sis_course_id/i.test(csvCourseColumn.value)) {
