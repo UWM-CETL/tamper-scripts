@@ -21,7 +21,9 @@ Its shared **Published courses only** scope is enabled by default and is applied
 operate on courses. A grouped, multiple-selection **Terms** scope provides flexible meta-options for
 **All Current Terms** and **All Terms**, followed by the Canvas **Default Term** and individual
 **Current Terms**, **Future Terms**, **Past Terms**, and **Undated Terms**. All Current Terms is the
-safe default and can be combined with individual terms from the other groups.
+safe default and can be combined with individual terms from the other groups. The selector excludes
+root-account terms that Canvas reports are unused in the selected account or subaccount. All Terms
+therefore means all terms used in that selected scope, not every consortium term.
 
 ### Course navigation links report
 

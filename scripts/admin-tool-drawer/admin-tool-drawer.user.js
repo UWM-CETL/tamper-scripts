@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.5.0
+// @version      0.6.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -14,7 +14,7 @@
   const CONFIG = {
     adminCacheKey: 'uwm-canvas-admin-tool-drawer:is-admin:v1',
     adminCacheTtlMs: 15 * 60 * 1000,
-    termsCacheKeyPrefix: 'uwm-canvas-admin-tool-drawer:terms:v1:',
+    termsCacheKeyPrefix: 'uwm-canvas-admin-tool-drawer:terms:v2:',
     termsCacheTtlMs: 15 * 60 * 1000,
     failedCheckCacheTtlMs: 60 * 1000,
     api: {
@@ -838,6 +838,17 @@
           margin-bottom: 7px;
         }
 
+        .account-scope-row {
+          align-items: center;
+          display: grid;
+          gap: 12px;
+          grid-template-columns: max-content minmax(0, 1fr);
+        }
+
+        .account-scope-row .context-label {
+          margin: 0;
+        }
+
         .context-id {
           appearance: textfield;
           background: #fffaf4;
@@ -903,7 +914,7 @@
           font: inherit;
           font-size: 0.84rem;
           line-height: 1.35;
-          min-height: 190px;
+          min-height: 95px;
           padding: 5px;
           width: 100%;
         }
@@ -1157,8 +1168,10 @@
                 <span class="accordion-chevron" aria-hidden="true">›</span>
               </button>
               <div class="accordion-panel" id="uwm-admin-context-panel" role="region" aria-labelledby="uwm-admin-context-trigger" hidden>
-                <label class="context-label" for="uwm-admin-context-id">Canvas account ID</label>
-                <input class="context-id" id="uwm-admin-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 49" value="${canvasContext.accountId}">
+                <div class="account-scope-row">
+                  <label class="context-label" for="uwm-admin-context-id">Canvas account ID</label>
+                  <input class="context-id" id="uwm-admin-context-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 49" value="${canvasContext.accountId}">
+                </div>
                 <p class="context-help">${canvasContext.accountId ? 'Filled from the current Canvas account.' : 'Enter the account or subaccount ID for these tools.'}</p>
 
                 <div class="admin-scope-filter">
@@ -1331,25 +1344,8 @@
       return 'current';
     }
 
-    function termDateLabel(term) {
-      const formatter = new Intl.DateTimeFormat(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-      });
-      const start = termTime(term, 'start_at');
-      const end = termTime(term, 'end_at');
-      if (start === null && end === null) return 'no dates';
-      if (start === null) return `through ${formatter.format(end)}`;
-      if (end === null) return `from ${formatter.format(start)}`;
-      return `${formatter.format(start)} – ${formatter.format(end)}`;
-    }
-
     function termOptionLabel(term) {
-      const hasCount = term.course_count !== null && term.course_count !== undefined;
-      const count = hasCount ? Number(term.course_count) : NaN;
-      const countLabel = Number.isFinite(count) ? ` · ${count} course${count === 1 ? '' : 's'}` : '';
-      return `${term.name || `Term ${term.id}`} · ${termDateLabel(term)}${countLabel}`;
+      return term.name || `Term ${term.id}`;
     }
 
     function appendTermGroup(label, terms) {
@@ -1461,14 +1457,13 @@
             subaccount_id: accountId,
             per_page: '100'
           });
-          params.append('include[]', 'course_count');
-          params.append('include[]', 'overrides');
           const terms = await canvasApi.getAll(
             `/api/v1/accounts/${encodeURIComponent(rootAccountId)}/terms?${params.toString()}`,
             { itemsKey: 'enrollment_terms' }
           );
-          cached = { rootAccountId, terms };
-          cacheTerms(accountId, rootAccountId, terms);
+          const applicableTerms = terms.filter(term => term.used_in_subaccount === true);
+          cached = { rootAccountId, terms: applicableTerms };
+          cacheTerms(accountId, rootAccountId, applicableTerms);
         }
 
         if (loadSequence !== termsLoadSequence || adminContextInput.value.trim() !== accountId) return;
