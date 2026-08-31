@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.9.0
+// @version      0.9.1
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -2239,11 +2239,9 @@
         }));
 
         const rows = rowsByCourse.flat();
-        const scopeLabel = scope.publishedOnly ? 'published' : 'all';
-        const termScopeLabel = scope.allTerms ? 'all-terms' : 'term-scoped';
+        const publicationLabel = scope.publishedOnly ? 'pub' : 'unpub';
         const filename =
-          `canvas-navigation-links.account-${scope.accountId}.${scopeLabel}.${termScopeLabel}.` +
-          `${timestampForFilename()}.csv`;
+          `nav.acct-${scope.accountId}.${publicationLabel}.${timestampForFilename()}.csv`;
 
         downloadCsv({
           rows,

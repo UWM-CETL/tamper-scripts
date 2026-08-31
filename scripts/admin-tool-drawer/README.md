@@ -43,6 +43,13 @@ the number of courses checked, navigation links found, course errors, and the la
 remaining value. A failed course is recorded as an error row without discarding successful results
 from other courses.
 
+Report filenames use the compact pattern `nav.acct-<account-id>.<pub|unpub>.<timestamp>.csv`. `pub`
+means the **Published courses only** filter was applied; `unpub` means that filter was disabled and
+the report can contain courses in any publication state. Term scope is intentionally omitted from the
+filename because it can represent multiple selections. The selected scope remains recorded in
+`scope.enrollment_term_ids` and `scope.enrollment_term_names`, while each row identifies its course's
+term through `term.id`, `term.sis_term_id`, and `term.name`.
+
 ### CSV course scope
 
 The optional **CSV course scope** parses a local CSV in the browser; it does not send the file to a
