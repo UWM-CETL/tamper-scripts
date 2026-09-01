@@ -126,8 +126,10 @@ applies the same concurrency, quota, retry, and backoff controls used by reports
 Under **Course → Clone or sync sections**, the current Course context is the destination. The Course
 CSV supplies source sections through an explicitly selected Canvas section ID column. In this
 drawer's section-match report, that field is `section.id`; `section.sis_section_id` is the SIS value
-and is not accepted by this action. A holding-tank Canvas course ID is required. The read-only
-analysis resolves every unique
+and is not accepted by this action. A holding-tank Canvas course ID is required. It is a shared
+Course-context scope field rather than an action-specific parameter, persists for the current Canvas
+site, and is available to other Course tools that need temporary staging. The read-only analysis
+resolves every unique
 source section, loads all active and invited section enrollments with common pagination, validates the
 destination and holding courses, and discovers the exact Canvas enrollment roles present in the
 source or an existing managed clone. Student-based roles are selected by default; custom roles retain

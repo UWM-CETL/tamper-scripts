@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.13.2
+// @version      0.13.3
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -16,6 +16,7 @@
     adminCacheTtlMs: 15 * 60 * 1000,
     termsCacheKeyPrefix: 'uwm-canvas-admin-tool-drawer:terms:v2:',
     termsCacheTtlMs: 15 * 60 * 1000,
+    holdingCourseIdKey: 'uwm-canvas-admin-tool-drawer:holding-course-id:v1',
     failedCheckCacheTtlMs: 60 * 1000,
     api: {
       maxConcurrency: 15,
@@ -86,6 +87,24 @@
       pageId,
       pageType
     };
+  }
+
+  function readHoldingCourseId() {
+    try {
+      const value = window.localStorage.getItem(CONFIG.holdingCourseIdKey) || '';
+      return /^\d+$/.test(value) ? value : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function saveHoldingCourseId(value) {
+    try {
+      if (value) window.localStorage.setItem(CONFIG.holdingCourseIdKey, value);
+      else window.localStorage.removeItem(CONFIG.holdingCourseIdKey);
+    } catch {
+      // Persistence is optional. The common field still works for this page.
+    }
   }
 
   function readCachedAdminStatus() {
@@ -824,6 +843,7 @@
     if (document.getElementById(HOST_ID) || !document.body) return;
 
     const canvasContext = detectCanvasContext();
+    const holdingCourseId = readHoldingCourseId();
     const host = document.createElement('div');
     host.id = HOST_ID;
     const shadowRoot = host.attachShadow({ mode: 'open' });
@@ -1790,6 +1810,12 @@
                 </div>
                 <p class="context-help">${canvasContext.courseId ? 'Filled from the current Canvas course.' : 'Enter the course ID for these tools.'}</p>
 
+                <div class="account-scope-row">
+                  <label class="context-label" for="uwm-course-holding-course-id">Holding-tank Canvas course ID</label>
+                  <input class="context-id" id="uwm-course-holding-course-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 881410" value="${holdingCourseId}">
+                </div>
+                <p class="context-help">Shared by Course tools and saved for this Canvas site.</p>
+
                 <div class="admin-scope-filter">
                   <div class="csv-scope course-csv-scope">
                     <p class="scope-section-title">CSV input</p>
@@ -1810,10 +1836,6 @@
                         <label class="field-label" for="uwm-clone-source-section-column">
                           Canvas section ID column
                           <select class="field-select" id="uwm-clone-source-section-column" disabled></select>
-                        </label>
-                        <label class="field-label" for="uwm-clone-holding-course-id">
-                          Holding-tank Canvas course ID
-                          <input class="context-id" id="uwm-clone-holding-course-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 881410">
                         </label>
                       </div>
                       <p class="tool-description">For a section-match report created by this drawer, choose <code>section.id — Canvas section ID</code>. The similarly named <code>section.sis_section_id</code> column is not the Canvas ID.</p>
@@ -1888,6 +1910,7 @@
     const csvCourseIdType = shadowRoot.querySelector('#uwm-admin-csv-course-id-type');
     const csvStatus = shadowRoot.querySelector('#uwm-admin-csv-status');
     const courseContextInput = shadowRoot.querySelector('#uwm-course-context-id');
+    const courseHoldingCourseInput = shadowRoot.querySelector('#uwm-course-holding-course-id');
     const courseCsvFileInput = shadowRoot.querySelector('#uwm-course-csv-file');
     const courseCsvStatus = shadowRoot.querySelector('#uwm-course-csv-status');
     const navigationReportTrigger = shadowRoot.querySelector('#uwm-navigation-links-report');
@@ -1920,7 +1943,6 @@
     const enableNavigationProgress = shadowRoot.querySelector('#uwm-enable-navigation-progress');
     const enableNavigationStatusText = shadowRoot.querySelector('#uwm-enable-navigation-status-text');
     const cloneSourceSectionColumn = shadowRoot.querySelector('#uwm-clone-source-section-column');
-    const cloneHoldingCourseInput = shadowRoot.querySelector('#uwm-clone-holding-course-id');
     const cloneLimitStudents = shadowRoot.querySelector('#uwm-clone-limit-students');
     const cloneAnalyze = shadowRoot.querySelector('#uwm-clone-sections-analyze');
     const cloneAnalysis = shadowRoot.querySelector('#uwm-clone-sections-analysis');
@@ -2237,9 +2259,9 @@
     function refreshCloneAvailability() {
       const hasCsv = Boolean(courseCsvScope?.rows.length);
       const destinationIsValid = /^\d+$/.test(courseContextInput.value.trim());
-      const holdingIsValid = /^\d+$/.test(cloneHoldingCourseInput.value.trim());
+      const holdingIsValid = /^\d+$/.test(courseHoldingCourseInput.value.trim());
       cloneSourceSectionColumn.disabled = courseScopeLocked || !hasCsv;
-      cloneHoldingCourseInput.disabled = courseScopeLocked;
+      courseHoldingCourseInput.disabled = courseScopeLocked;
       cloneLimitStudents.disabled = courseScopeLocked;
       courseCsvFileInput.disabled = courseScopeLocked;
       cloneAnalyze.disabled = courseScopeLocked || cloneRunning || !hasCsv ||
@@ -2453,8 +2475,9 @@
     adminContextInput.addEventListener('input', scheduleTermsLoad);
     csvFileInput.addEventListener('change', () => loadCsvScope(csvFileInput.files?.[0]));
     courseCsvFileInput.addEventListener('change', () => loadCourseCsvScope(courseCsvFileInput.files?.[0]));
-    for (const input of [courseContextInput, cloneHoldingCourseInput]) {
+    for (const input of [courseContextInput, courseHoldingCourseInput]) {
       input.addEventListener('input', () => {
+        if (input === courseHoldingCourseInput) saveHoldingCourseId(input.value.trim());
         resetCloneAnalysis();
         refreshCloneAvailability();
       });
@@ -3592,7 +3615,7 @@
         enableNavigationRunning || adminScopeLocked || !courseCsvScope) return;
 
       const destinationCourseId = courseContextInput.value.trim();
-      const holdingCourseId = cloneHoldingCourseInput.value.trim();
+      const holdingCourseId = courseHoldingCourseInput.value.trim();
       const sourceColumn = cloneSourceSectionColumn.value;
       if (!/^\d+$/.test(destinationCourseId) || !/^\d+$/.test(holdingCourseId) || !sourceColumn) {
         showCloneStatus('Choose a source section column and enter both numeric course IDs.', {
