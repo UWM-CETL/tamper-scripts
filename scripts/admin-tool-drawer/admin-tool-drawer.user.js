@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.14.3
+// @version      0.15.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1298,6 +1298,20 @@
           margin-top: 15px;
         }
 
+        .course-quick-action {
+          border-top: 1px solid rgb(255 247 237 / 14%);
+          margin-top: 14px;
+          padding-top: 14px;
+        }
+
+        .course-quick-action .action-button {
+          margin-top: 0;
+        }
+
+        .course-quick-action .run-status {
+          background: rgb(244 185 66 / 8%);
+        }
+
         .scope-section-title {
           color: var(--uwm-text);
           font-size: 0.82rem;
@@ -1961,6 +1975,14 @@
                 </div>
                 <p class="context-help">${canvasContext.courseId ? 'Filled from the current Canvas course.' : 'Enter the course ID for these tools.'}</p>
 
+                <div class="course-quick-action operation-branch">
+                  <button class="action-button secondary" id="uwm-email-instructors" type="button" ${canvasContext.courseId ? '' : 'disabled'}>Email instructors</button>
+                  <p class="tool-description">Opens a new message in your default email app. Nothing is sent automatically.</p>
+                  <div class="run-status" id="uwm-email-instructors-status" role="status" aria-live="polite" hidden>
+                    <p id="uwm-email-instructors-status-text"></p>
+                  </div>
+                </div>
+
                 <div class="account-scope-row">
                   <label class="context-label" for="uwm-course-holding-course-id">Holding-tank Canvas course ID</label>
                   <input class="context-id" id="uwm-course-holding-course-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 881410" value="${holdingCourseId}">
@@ -2075,6 +2097,9 @@
     const courseHoldingCourseInput = shadowRoot.querySelector('#uwm-course-holding-course-id');
     const courseCsvFileInput = shadowRoot.querySelector('#uwm-course-csv-file');
     const courseCsvStatus = shadowRoot.querySelector('#uwm-course-csv-status');
+    const emailInstructorsButton = shadowRoot.querySelector('#uwm-email-instructors');
+    const emailInstructorsStatus = shadowRoot.querySelector('#uwm-email-instructors-status');
+    const emailInstructorsStatusText = shadowRoot.querySelector('#uwm-email-instructors-status-text');
     const navigationReportTrigger = shadowRoot.querySelector('#uwm-navigation-links-report');
     const navigationConfirmation = shadowRoot.querySelector('#uwm-navigation-links-confirmation');
     const navigationConfirmationText = shadowRoot.querySelector('#uwm-navigation-links-confirmation-text');
@@ -2132,6 +2157,7 @@
     let cloneAnalysisPlan = null;
     let cloneExecutionPlan = null;
     let cloneRunning = false;
+    let emailInstructorsRunning = false;
     let courseScopeLocked = false;
     let availableTerms = [];
     let termsAccountId = '';
@@ -2154,7 +2180,8 @@
 
       drawer.setAttribute('aria-busy', 'true');
       contextAccordions.setAttribute('aria-busy', 'true');
-      let activeBranch = activeControl.closest('.action-accordion-item') ||
+      let activeBranch = activeControl.closest('.operation-branch') ||
+        activeControl.closest('.action-accordion-item') ||
         activeControl.closest('.subaccordion-item') ||
         activeControl.closest('.accordion-item');
       while (activeBranch && activeBranch !== contextAccordions) {
@@ -2458,6 +2485,8 @@
       courseHoldingCourseInput.disabled = courseScopeLocked;
       cloneLimitStudents.disabled = courseScopeLocked;
       courseCsvFileInput.disabled = courseScopeLocked;
+      emailInstructorsButton.disabled = courseScopeLocked || emailInstructorsRunning ||
+        !destinationIsValid;
       cloneAnalyze.disabled = courseScopeLocked || cloneRunning || !hasCsv ||
         !cloneSourceSectionColumn.value || !destinationIsValid || !holdingIsValid;
       cloneContinue.disabled = courseScopeLocked || cloneRunning || !cloneExecutionPlan;
@@ -2471,6 +2500,104 @@
         checkbox.disabled = isLocked;
       }
     }
+
+    function showEmailInstructorsStatus(message, { isError = false } = {}) {
+      emailInstructorsStatus.hidden = false;
+      emailInstructorsStatus.classList.toggle('is-error', isError);
+      emailInstructorsStatusText.textContent = message;
+    }
+
+    function validEmailAddress(value) {
+      const email = String(value || '').trim();
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+    }
+
+    async function emailCourseInstructors() {
+      if (emailInstructorsRunning || navigationReportRunning || sectionReportRunning ||
+        enableNavigationRunning || cloneRunning || cloneExecutionPlan) return;
+
+      const courseId = courseContextInput.value.trim();
+      if (!/^\d+$/.test(courseId)) {
+        courseContextInput.setCustomValidity('Enter a numeric Canvas course ID.');
+        courseContextInput.reportValidity();
+        courseContextInput.focus();
+        return;
+      }
+
+      emailInstructorsRunning = true;
+      setDrawerOperationLock(true, emailInstructorsButton);
+      setCourseScopeLocked(true);
+      showEmailInstructorsStatus('Finding the current instructors for this course…');
+
+      try {
+        const params = new URLSearchParams({ per_page: '100' });
+        params.append('enrollment_type[]', 'teacher');
+        params.append('enrollment_state[]', 'active');
+        params.append('enrollment_state[]', 'invited');
+        const [courseResult, instructors] = await Promise.all([
+          canvasApi.get(`/api/v1/courses/${encodeURIComponent(courseId)}`),
+          canvasApi.getAll(
+            `/api/v1/courses/${encodeURIComponent(courseId)}/users?${params.toString()}`
+          )
+        ]);
+
+        const missingEmailUsers = [];
+        const emails = [];
+        for (const instructor of instructors) {
+          const email = validEmailAddress(instructor.email) ||
+            validEmailAddress(instructor.login_id);
+          if (email) emails.push(email);
+          else if (instructor.id) missingEmailUsers.push(instructor);
+        }
+
+        const profileEmails = await Promise.all(missingEmailUsers.map(async instructor => {
+          try {
+            const result = await canvasApi.get(
+              `/api/v1/users/${encodeURIComponent(String(instructor.id))}/profile`
+            );
+            return validEmailAddress(result.data?.primary_email) ||
+              validEmailAddress(result.data?.email);
+          } catch {
+            return '';
+          }
+        }));
+        emails.push(...profileEmails.filter(Boolean));
+        const missingCount = profileEmails.filter(email => !email).length;
+
+        const uniqueEmails = Array.from(new Map(emails.map(email => (
+          [email.toLowerCase(), email]
+        ))).values());
+        if (!uniqueEmails.length) {
+          throw new Error('Canvas did not provide an email address for any current instructor.');
+        }
+
+        const course = courseResult.data || {};
+        const courseLabels = Array.from(new Set([
+          course.course_code,
+          course.name
+        ].map(value => String(value || '').trim()).filter(Boolean)));
+        const subject = `Canvas course: ${courseLabels.join(' — ') || courseId}`;
+        const recipients = uniqueEmails.map(email => encodeURIComponent(email)).join(',');
+        const mailtoUrl = `mailto:${recipients}?subject=${encodeURIComponent(subject)}`;
+        showEmailInstructorsStatus(
+          `Opening a message to ${uniqueEmails.length} instructor${uniqueEmails.length === 1 ? '' : 's'}` +
+          `${missingCount > 0 ? `; ${missingCount} had no accessible email address` : ''}.`
+        );
+        window.location.assign(mailtoUrl);
+      } catch (error) {
+        console.error('Could not open an instructor email.', error);
+        showEmailInstructorsStatus(`Could not open the message: ${error.message}`, {
+          isError: true
+        });
+      } finally {
+        emailInstructorsRunning = false;
+        setDrawerOperationLock(false);
+        setCourseScopeLocked(false);
+        refreshCloneAvailability();
+      }
+    }
+
+    emailInstructorsButton.addEventListener('click', emailCourseInstructors);
 
     async function loadCourseCsvScope(file) {
       resetCloneAnalysis();
@@ -2931,7 +3058,8 @@
 
     navigationReportTrigger.addEventListener('click', () => {
       if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
-        pendingSectionScope || enableNavigationRunning || cloneRunning || cloneExecutionPlan) return;
+        pendingSectionScope || enableNavigationRunning || cloneRunning || cloneExecutionPlan ||
+        emailInstructorsRunning) return;
 
       const accountId = adminContextInput.value.trim();
       if (!/^\d+$/.test(accountId)) {
@@ -3256,7 +3384,7 @@
     sectionReportTrigger.addEventListener('click', () => {
       if (navigationReportRunning || sectionReportRunning || pendingNavigationScope ||
         pendingSectionScope || enableNavigationRunning || cloneRunning || cloneExecutionPlan ||
-        !csvScope) return;
+        emailInstructorsRunning || !csvScope) return;
 
       const classNumberColumn = sectionClassNumberColumn.value;
       if (!classNumberColumn) {
@@ -3379,7 +3507,7 @@
 
     async function analyzeEnableNavigation() {
       if (enableNavigationRunning || navigationReportRunning || sectionReportRunning || cloneRunning ||
-        cloneExecutionPlan || !csvScope) return;
+        cloneExecutionPlan || emailInstructorsRunning || !csvScope) return;
 
       const courseColumn = csvCourseColumn.value;
       const toolColumn = enableNavigationToolColumn.value;
@@ -3930,7 +4058,7 @@
 
     async function analyzeCloneSections() {
       if (cloneRunning || navigationReportRunning || sectionReportRunning ||
-        enableNavigationRunning || adminScopeLocked || !courseCsvScope) return;
+        enableNavigationRunning || emailInstructorsRunning || adminScopeLocked || !courseCsvScope) return;
 
       const destinationCourseId = courseContextInput.value.trim();
       const holdingCourseId = courseHoldingCourseInput.value.trim();

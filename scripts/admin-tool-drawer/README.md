@@ -38,6 +38,15 @@ inert. The drawer restores those controls automatically when the operation finis
 completed read-only review keeps the rest of the drawer locked only when that same panel is waiting
 for its final Run or Cancel choice.
 
+### Email course instructors
+
+The Course context includes a one-click **Email instructors** action. It looks up active and invited
+users whose enrollment is based on Canvas's Teacher role, including custom instructor roles, and
+opens the computer's default email application with those addresses in the recipient field. The
+subject identifies the Canvas course by course code and name. When an address is not present on the
+course user record, the action checks that instructor's Canvas profile before omitting them. Duplicate
+addresses are removed. The action only opens a draft; it never sends a message.
+
 ### Course navigation links report
 
 Under **Admin → Courses**, **Get all navigation links** creates a CSV containing the available Canvas
