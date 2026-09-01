@@ -137,6 +137,17 @@ their Canvas `role_id`. Repeated source section IDs are processed once. Their ad
 are retained in the results CSV with `run.status=deduplicated`; they are not counted as blocked or
 failed because reports from an earlier sync can legitimately contain one row per enrollment or action.
 
+For input groups of 25 or more unique sections with numeric `scope.account_id` and `term.id` fields,
+analysis automatically uses one term-scoped Canvas Provisioning report containing `sections.csv` and
+`enrollments.csv`. The report provides Canvas section, user, enrollment, role, observer-association,
+state, and section-privilege fields, so custom roles and observer relationships retain the same
+identity rules as direct REST reads. Active and invited enrollments are requested and filtered again
+locally. Completed report IDs are cached in the current browser tab for 15 minutes so another analysis
+of the same account and term can reuse the snapshot. Missing scope fields, small groups, unavailable
+reports, missing sections, or unexpected report columns fall back to the existing per-section REST
+path rather than blocking the run. Results record the chosen path in `scope.source_read_mode` and the
+report IDs in `scope.source_report_ids`.
+
 A managed clone has the canonical visible name
 `<source section name> - Copy [src <source Canvas section ID>]`. The script positively identifies it
 with both the exact final marker and its Canvas cross-list origin (`nonxlist_course_id`) matching the
@@ -165,6 +176,10 @@ the next analysis recognizes and resumes it. The results CSV uses the compact fi
 `sec-sync.course-<destination-course-id>.<timestamp>.csv`, preserves every input column, and adds
 `src.*`, `clone.*`, `enrollment.*`, `scope.*`, and `run.*` fields. API-created enrollments are not
 SIS-managed records.
+
+Provisioning reports accelerate analysis but do not bulk-create cloned enrollments. Canvas's bulk
+enrollment endpoint targets courses rather than specific sections and cannot express the required
+student section-limit setting, so confirmed enrollment writes remain one request per enrollment.
 
 The icon is only added when the current Canvas user can view at least one account through Canvas's
 Accounts API. Canvas normally returns an empty account list for students and teachers. The result is

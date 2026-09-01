@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.13.4
+// @version      0.14.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -17,6 +17,9 @@
     termsCacheKeyPrefix: 'uwm-canvas-admin-tool-drawer:terms:v2:',
     termsCacheTtlMs: 15 * 60 * 1000,
     holdingCourseIdKey: 'uwm-canvas-admin-tool-drawer:holding-course-id:v1',
+    cloneReportCacheKeyPrefix: 'uwm-canvas-admin-tool-drawer:clone-report:v1:',
+    cloneReportCacheTtlMs: 15 * 60 * 1000,
+    cloneReportMinimumSections: 25,
     failedCheckCacheTtlMs: 60 * 1000,
     api: {
       maxConcurrency: 15,
@@ -104,6 +107,46 @@
       else window.localStorage.removeItem(CONFIG.holdingCourseIdKey);
     } catch {
       // Persistence is optional. The common field still works for this page.
+    }
+  }
+
+  function cloneReportCacheKey(accountId, termId) {
+    return `${CONFIG.cloneReportCacheKeyPrefix}${accountId}:${termId}`;
+  }
+
+  function readCachedCloneReport(accountId, termId) {
+    const key = cloneReportCacheKey(accountId, termId);
+    try {
+      const cached = JSON.parse(window.sessionStorage.getItem(key) || 'null');
+      if (!cached?.reportId || cached.expiresAt <= Date.now()) {
+        window.sessionStorage.removeItem(key);
+        return null;
+      }
+      return cached;
+    } catch {
+      return null;
+    }
+  }
+
+  function cacheCloneReport(accountId, termId, reportId) {
+    try {
+      window.sessionStorage.setItem(
+        cloneReportCacheKey(accountId, termId),
+        JSON.stringify({
+          reportId,
+          expiresAt: Date.now() + CONFIG.cloneReportCacheTtlMs
+        })
+      );
+    } catch {
+      // Report reuse is optional. A fresh report remains a safe fallback.
+    }
+  }
+
+  function clearCachedCloneReport(accountId, termId) {
+    try {
+      window.sessionStorage.removeItem(cloneReportCacheKey(accountId, termId));
+    } catch {
+      // No action is required when storage is unavailable.
     }
   }
 
@@ -676,9 +719,48 @@
     ].join('|');
   }
 
-  async function extractZipEntryText(arrayBuffer, expectedFileName) {
+  function cloneSectionFromProvisioning(row) {
+    return {
+      id: row.canvas_section_id || '',
+      sis_section_id: row.section_id || '',
+      integration_id: row.integration_id || '',
+      name: row.name || '',
+      course_id: row.canvas_course_id || '',
+      account_id: row.canvas_account_id || '',
+      workflow_state: row.status || '',
+      start_at: row.start_date || null,
+      end_at: row.end_date || null
+    };
+  }
+
+  function cloneEnrollmentFromProvisioning(row) {
+    return {
+      id: row.canvas_enrollment_id || '',
+      user_id: row.canvas_user_id || '',
+      type: row.base_role_type || '',
+      role: row.role || row.base_role_type || '',
+      role_id: row.role_id || '',
+      enrollment_state: row.status || '',
+      associated_user_id: row.canvas_associated_user_id || '',
+      limit_privileges_to_course_section:
+        parseCanvasBoolean(row.limit_section_privileges)
+    };
+  }
+
+  function requireCsvHeaders(parsed, fileName, requiredHeaders) {
+    const missingHeader = requiredHeaders.find(header => !parsed.headers.includes(header));
+    if (missingHeader) {
+      throw new Error(`${fileName} is missing the expected ${missingHeader} column.`);
+    }
+  }
+
+  async function extractZipEntryTexts(arrayBuffer, expectedFileNames) {
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const expectedNames = new Map(expectedFileNames.map(fileName => (
+      [fileName.toLowerCase(), fileName]
+    )));
+    const extracted = {};
     const minimumEocdOffset = Math.max(0, bytes.length - 65557);
     let eocdOffset = -1;
 
@@ -709,7 +791,8 @@
         bytes.slice(directoryOffset + 46, directoryOffset + 46 + fileNameLength)
       );
 
-      if (fileName.split('/').pop()?.toLowerCase() === expectedFileName.toLowerCase()) {
+      const requestedName = expectedNames.get(fileName.split('/').pop()?.toLowerCase());
+      if (requestedName) {
         if (view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
           throw new Error(`Canvas report ZIP entry is invalid: ${fileName}`);
         }
@@ -718,24 +801,31 @@
         const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
         const compressed = bytes.slice(dataOffset, dataOffset + compressedSize);
 
-        if (compressionMethod === 0) return decoder.decode(compressed);
-        if (compressionMethod !== 8 || typeof DecompressionStream !== 'function') {
-          throw new Error(`Unsupported Canvas report ZIP compression method: ${compressionMethod}`);
-        }
+        if (compressionMethod === 0) {
+          extracted[requestedName] = decoder.decode(compressed);
+        } else {
+          if (compressionMethod !== 8 || typeof DecompressionStream !== 'function') {
+            throw new Error(`Unsupported Canvas report ZIP compression method: ${compressionMethod}`);
+          }
 
-        const stream = new Blob([compressed])
-          .stream()
-          .pipeThrough(new DecompressionStream('deflate-raw'));
-        return decoder.decode(await new Response(stream).arrayBuffer());
+          const stream = new Blob([compressed])
+            .stream()
+            .pipeThrough(new DecompressionStream('deflate-raw'));
+          extracted[requestedName] = decoder.decode(await new Response(stream).arrayBuffer());
+        }
       }
 
       directoryOffset += 46 + fileNameLength + extraLength + commentLength;
     }
 
-    throw new Error(`${expectedFileName} was not included in the Canvas report.`);
+    const missingFileName = expectedFileNames.find(fileName => !(fileName in extracted));
+    if (missingFileName) {
+      throw new Error(`${missingFileName} was not included in the Canvas report.`);
+    }
+    return extracted;
   }
 
-  async function canvasReportCsv(report, fileName) {
+  async function canvasReportCsvFiles(report, fileNames) {
     const attachmentUrl = report?.attachment?.url;
     if (!attachmentUrl) throw new Error('Canvas completed the report without a download URL.');
 
@@ -753,9 +843,18 @@
       throw new Error('Canvas returned an empty or invalid report download.');
     }
     const signature = new DataView(arrayBuffer).getUint32(0, true);
-    return signature === 0x04034b50
-      ? extractZipEntryText(arrayBuffer, fileName)
-      : new TextDecoder().decode(arrayBuffer);
+    if (signature === 0x04034b50) {
+      return extractZipEntryTexts(arrayBuffer, fileNames);
+    }
+    if (fileNames.length !== 1) {
+      throw new Error('Canvas returned one CSV when multiple report files were expected.');
+    }
+    return { [fileNames[0]]: new TextDecoder().decode(arrayBuffer) };
+  }
+
+  async function canvasReportCsv(report, fileName) {
+    const files = await canvasReportCsvFiles(report, [fileName]);
+    return files[fileName];
   }
 
   const NAVIGATION_LINK_COLUMNS = [
@@ -2872,7 +2971,7 @@
         }
         await new Promise(resolve => window.setTimeout(resolve, 3000));
       }
-      throw new Error('Canvas section report did not finish within two hours.');
+      throw new Error('Canvas provisioning report did not finish within two hours.');
     }
 
     async function provisioningSectionRows(scope, term, reportIndex, reportCount, generatedAt) {
@@ -3491,6 +3590,118 @@
       return `/api/v1/sections/${encodeURIComponent(String(sectionId))}/enrollments?${params.toString()}`;
     }
 
+    function cloneProvisioningScope(row) {
+      const accountId = String(row['scope.account_id'] ?? '').trim();
+      const termId = String(
+        row['term.id'] ?? row['course.enrollment_term_id'] ?? ''
+      ).trim();
+      if (!/^\d+$/.test(accountId) || !/^\d+$/.test(termId)) return null;
+      return { accountId, termId, key: `${accountId}:${termId}` };
+    }
+
+    async function cloneProvisioningData(accountId, termId) {
+      let report = null;
+      const cached = readCachedCloneReport(accountId, termId);
+      if (cached) {
+        try {
+          const cachedResult = await canvasApi.get(
+            `/api/v1/accounts/${encodeURIComponent(accountId)}/reports/provisioning_csv/` +
+            `${encodeURIComponent(String(cached.reportId))}`
+          );
+          report = cachedResult.data || null;
+          if (
+            !report?.id ||
+            ['error', 'errored', 'failed', 'aborted', 'canceled', 'cancelled'].includes(
+              String(report.status).toLowerCase()
+            )
+          ) {
+            report = null;
+            clearCachedCloneReport(accountId, termId);
+          }
+        } catch {
+          report = null;
+          clearCachedCloneReport(accountId, termId);
+        }
+      }
+
+      if (!report) {
+        const created = await canvasApi.request(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/reports/provisioning_csv`,
+          {
+            method: 'POST',
+            body: {
+              'parameters[sections]': '1',
+              'parameters[enrollments]': '1',
+              'parameters[enrollment_term_id]': termId,
+              'parameters[enrollment_states][]': ['active', 'invited']
+            }
+          }
+        );
+        report = created.data || {};
+        if (!report.id) throw new Error('Canvas did not return an enrollment report ID.');
+        cacheCloneReport(accountId, termId, report.id);
+      }
+
+      if (report.status !== 'complete') {
+        report = await waitForCanvasReport(accountId, report.id, current => {
+          const progress = Number(current.progress);
+          showCloneStatus(
+            `Canvas enrollment report for account ${accountId}, term ${termId}: ` +
+            `${current.status || 'queued'}${Number.isFinite(progress) ? ` (${progress}%).` : '.'}`
+          );
+        });
+      }
+      cacheCloneReport(accountId, termId, report.id);
+
+      showCloneStatus(
+        `Downloading Canvas enrollment report for account ${accountId}, term ${termId}.`
+      );
+      const files = await canvasReportCsvFiles(report, ['sections.csv', 'enrollments.csv']);
+      const sections = parseCsvText(files['sections.csv']);
+      const enrollments = parseCsvText(files['enrollments.csv']);
+      requireCsvHeaders(sections, 'sections.csv', [
+        'canvas_section_id',
+        'canvas_course_id',
+        'name',
+        'status'
+      ]);
+      requireCsvHeaders(enrollments, 'enrollments.csv', [
+        'canvas_enrollment_id',
+        'canvas_section_id',
+        'canvas_user_id',
+        'role_id',
+        'base_role_type',
+        'status',
+        'canvas_associated_user_id',
+        'limit_section_privileges'
+      ]);
+
+      const sectionsById = new Map();
+      for (const row of sections.rows) {
+        if (!/^\d+$/.test(String(row.canvas_section_id || ''))) continue;
+        sectionsById.set(String(row.canvas_section_id), cloneSectionFromProvisioning(row));
+      }
+
+      const enrollmentsBySectionId = new Map();
+      for (const row of enrollments.rows) {
+        const sectionId = String(row.canvas_section_id || '');
+        if (!/^\d+$/.test(sectionId) || !['active', 'invited'].includes(row.status)) continue;
+        const enrollment = cloneEnrollmentFromProvisioning(row);
+        if (!enrollment.id || !enrollment.user_id || !enrollment.type || !enrollment.role_id) {
+          throw new Error('enrollments.csv contains a row without required Canvas enrollment fields.');
+        }
+        const sectionEnrollments = enrollmentsBySectionId.get(sectionId) || [];
+        sectionEnrollments.push(enrollment);
+        enrollmentsBySectionId.set(sectionId, sectionEnrollments);
+      }
+
+      return {
+        reportId: report.id,
+        sectionsById,
+        enrollmentsBySectionId
+      };
+    }
+
     function cloneRoleDefinitions(entries) {
       const definitions = new Map();
       for (const entry of entries) {
@@ -3596,7 +3807,7 @@
       entry.cloneSection = null;
     }
 
-    function cloneAnalysisSummary(entries) {
+    function cloneAnalysisSummary(entries, sourceReadStats = null) {
       const uniqueEntries = entries.filter(entry => entry.status !== 'duplicate_source');
       const count = state => uniqueEntries.filter(entry => entry.cloneState === state).length;
       const errors = uniqueEntries.filter(entry => entry.status && entry.status !== 'ready').length;
@@ -3605,11 +3816,16 @@
         (total, entry) => total + (entry.sourceEnrollments?.length || 0),
         0
       );
+      const sourceReadText = sourceReadStats
+        ? ` Source reads: ${sourceReadStats.reportSections} from ` +
+          `${sourceReadStats.reportGroups} Canvas enrollment report(s), ` +
+          `${sourceReadStats.directSections} through direct section API fallback.`
+        : '';
       return `${uniqueEntries.length} unique source section(s): ${count('new')} new, ` +
         `${count('existing')} already in the destination, ${count('resumable')} resumable in the ` +
         `holding course, ${count('ambiguous')} ambiguous. ${enrollments} active or invited ` +
         `source enrollment(s) found; ${duplicates} repeated CSV row(s) deduplicated; ` +
-        `${errors} blocked section(s).`;
+        `${errors} blocked section(s).${sourceReadText}`;
     }
 
     async function analyzeCloneSections() {
@@ -3684,22 +3900,108 @@
         }
 
         const uniqueEntries = entries.filter(entry => !entry.status);
+        const sourceReadStats = {
+          reportGroups: 0,
+          reportSections: 0,
+          directSections: 0,
+          reportIds: [],
+          reportFallbacks: []
+        };
+        const reportGroups = new Map();
+        const directEntries = [];
+        for (const entry of uniqueEntries) {
+          const scope = cloneProvisioningScope(entry.row);
+          if (!scope) {
+            directEntries.push(entry);
+            continue;
+          }
+          const group = reportGroups.get(scope.key) || { ...scope, entries: [] };
+          group.entries.push(entry);
+          reportGroups.set(scope.key, group);
+        }
+
         let completed = 0;
         cloneProgress.max = Math.max(1, uniqueEntries.length);
         cloneProgress.value = 0;
-        await Promise.all(uniqueEntries.map(async entry => {
+
+        const finishSourceEntry = (entry, sourceSection, sourceEnrollments, readMode) => {
+          entry.sourceSection = sourceSection || {};
+          if (!entry.sourceSection.id) throw new Error('Canvas did not return a source section ID.');
+          entry.sourceEnrollments = sourceEnrollments || [];
+          entry.sourceReadMode = readMode;
+          entry.desiredName = cloneSectionName(entry.sourceSection);
+          classifyClone(entry, destinationSections, holdingSections, holdingCourseId);
+          if (!entry.status) entry.status = 'ready';
+        };
+
+        for (const group of reportGroups.values()) {
+          if (group.entries.length < CONFIG.cloneReportMinimumSections) {
+            directEntries.push(...group.entries);
+            continue;
+          }
+
+          let reportData;
+          try {
+            reportData = await cloneProvisioningData(group.accountId, group.termId);
+            sourceReadStats.reportGroups++;
+            sourceReadStats.reportIds.push(String(reportData.reportId));
+          } catch (error) {
+            console.warn(
+              'Canvas enrollment report could not accelerate section-clone analysis; using direct APIs.',
+              error
+            );
+            sourceReadStats.reportFallbacks.push({
+              accountId: group.accountId,
+              termId: group.termId,
+              error: error.message
+            });
+            directEntries.push(...group.entries);
+            showCloneStatus(
+              `Canvas enrollment report was unavailable for account ${group.accountId}, term ` +
+              `${group.termId}; falling back to direct section reads.`
+            );
+            continue;
+          }
+
+          for (const entry of group.entries) {
+            const sourceSection = reportData.sectionsById.get(entry.sourceRef);
+            if (!sourceSection) {
+              directEntries.push(entry);
+              continue;
+            }
+            try {
+              finishSourceEntry(
+                entry,
+                sourceSection,
+                reportData.enrollmentsBySectionId.get(entry.sourceRef) || [],
+                'provisioning_report'
+              );
+              sourceReadStats.reportSections++;
+              completed++;
+              cloneProgress.value = completed;
+              showCloneStatus(
+                `Reading source sections: ${completed} of ${uniqueEntries.length}.`
+              );
+            } catch (error) {
+              entry.status = 'source_error';
+              entry.error = error.message;
+              completed++;
+              cloneProgress.value = completed;
+            }
+          }
+        }
+
+        await Promise.all(directEntries.map(async entry => {
           try {
             const sectionResult = await canvasApi.get(
               `/api/v1/sections/${encodeURIComponent(entry.sourceRef)}`
             );
-            entry.sourceSection = sectionResult.data || {};
-            if (!entry.sourceSection.id) throw new Error('Canvas did not return a source section ID.');
-            entry.sourceEnrollments = await canvasApi.getAll(
-              cloneEnrollmentPath(entry.sourceSection.id)
+            const sourceSection = sectionResult.data || {};
+            const sourceEnrollments = await canvasApi.getAll(
+              cloneEnrollmentPath(sourceSection.id || entry.sourceRef)
             );
-            entry.desiredName = cloneSectionName(entry.sourceSection);
-            classifyClone(entry, destinationSections, holdingSections, holdingCourseId);
-            if (!entry.status) entry.status = 'ready';
+            finishSourceEntry(entry, sourceSection, sourceEnrollments, 'direct_api');
+            sourceReadStats.directSections++;
           } catch (error) {
             entry.status = 'source_error';
             entry.error = error.message;
@@ -3741,12 +4043,17 @@
           holdingCourseId,
           sourceColumn,
           entries,
-          roles
+          roles,
+          sourceReadStats
         };
-        cloneAnalysisText.textContent = cloneAnalysisSummary(entries);
+        cloneAnalysisText.textContent = cloneAnalysisSummary(entries, sourceReadStats);
         cloneAnalysis.hidden = false;
         renderCloneRoleOptions(roles);
-        showCloneStatus('Read-only analysis complete. Select the roles to synchronize.');
+        showCloneStatus(
+          `Read-only analysis complete: ${sourceReadStats.reportSections} source section(s) ` +
+          `loaded from Canvas enrollment reports and ${sourceReadStats.directSections} through ` +
+          `direct API reads. Select the roles to synchronize.`
+        );
       } catch (error) {
         console.error('Section clone analysis failed.', error);
         resetCloneAnalysis({ keepStatus: true });
@@ -3891,6 +4198,8 @@
         'scope.destination_course_id': plan.destinationCourseId,
         'scope.holding_course_id': plan.holdingCourseId,
         'scope.limit_students_to_section': plan.limitStudents,
+        'scope.source_read_mode': entry.sourceReadMode || '',
+        'scope.source_report_ids': plan.sourceReadStats?.reportIds.join('|') || '',
         'src.id': source.id ?? '',
         'src.sis_section_id': source.sis_section_id ?? '',
         'src.integration_id': source.integration_id ?? '',
@@ -4231,6 +4540,8 @@
         'scope.destination_course_id',
         'scope.holding_course_id',
         'scope.limit_students_to_section',
+        'scope.source_read_mode',
+        'scope.source_report_ids',
         'src.id',
         'src.sis_section_id',
         'src.integration_id',
