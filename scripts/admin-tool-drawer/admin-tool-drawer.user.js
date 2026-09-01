@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.18.1
+// @version      0.19.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -2022,6 +2022,44 @@
                             </div>
                           </div>
                         </section>
+
+                        <section class="action-accordion-item" data-course-action="enroll-admins">
+                          <button class="action-accordion-trigger" type="button" id="uwm-enroll-admins-trigger" aria-expanded="false" aria-controls="uwm-enroll-admins-panel">
+                            <span>Enroll admins</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-enroll-admins-panel" role="region" aria-labelledby="uwm-enroll-admins-trigger" hidden>
+                            <p class="tool-description">Places each uploaded person at the highest safe subaccounts. Accounts containing their active Student courses and every parent of those Accounts are excluded; unaffected sibling branches remain eligible.</p>
+                            <label class="field-label" for="uwm-enroll-admins-email-column">
+                              Email address column
+                              <select class="field-select" id="uwm-enroll-admins-email-column" disabled></select>
+                            </label>
+                            <button class="action-button" id="uwm-enroll-admins-analyze" type="button" disabled>Review placements</button>
+
+                            <div class="analysis-summary" id="uwm-enroll-admins-analysis" hidden>
+                              <p id="uwm-enroll-admins-analysis-text"></p>
+                            </div>
+
+                            <div class="confirmation" id="uwm-enroll-admins-confirmation" hidden>
+                              <label class="field-label" for="uwm-enroll-admins-role">
+                                Admin role
+                                <select class="field-select" id="uwm-enroll-admins-role">
+                                  <option value="">Choose a role</option>
+                                </select>
+                              </label>
+                              <p id="uwm-enroll-admins-confirmation-text"></p>
+                              <div class="confirmation-actions">
+                                <button class="confirmation-button primary" id="uwm-enroll-admins-continue" type="button" disabled>Enroll admins</button>
+                                <button class="confirmation-button" id="uwm-enroll-admins-cancel" type="button">Cancel</button>
+                              </div>
+                            </div>
+
+                            <div class="run-status" id="uwm-enroll-admins-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-enroll-admins-progress"></progress>
+                              <p id="uwm-enroll-admins-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
                       </div>
                     </div>
                   </section>
@@ -2230,6 +2268,18 @@
     const removeAdminsStatus = shadowRoot.querySelector('#uwm-remove-admins-status');
     const removeAdminsProgress = shadowRoot.querySelector('#uwm-remove-admins-progress');
     const removeAdminsStatusText = shadowRoot.querySelector('#uwm-remove-admins-status-text');
+    const enrollAdminsEmailColumn = shadowRoot.querySelector('#uwm-enroll-admins-email-column');
+    const enrollAdminsAnalyze = shadowRoot.querySelector('#uwm-enroll-admins-analyze');
+    const enrollAdminsAnalysis = shadowRoot.querySelector('#uwm-enroll-admins-analysis');
+    const enrollAdminsAnalysisText = shadowRoot.querySelector('#uwm-enroll-admins-analysis-text');
+    const enrollAdminsConfirmation = shadowRoot.querySelector('#uwm-enroll-admins-confirmation');
+    const enrollAdminsConfirmationText = shadowRoot.querySelector('#uwm-enroll-admins-confirmation-text');
+    const enrollAdminsRole = shadowRoot.querySelector('#uwm-enroll-admins-role');
+    const enrollAdminsContinue = shadowRoot.querySelector('#uwm-enroll-admins-continue');
+    const enrollAdminsCancel = shadowRoot.querySelector('#uwm-enroll-admins-cancel');
+    const enrollAdminsStatus = shadowRoot.querySelector('#uwm-enroll-admins-status');
+    const enrollAdminsProgress = shadowRoot.querySelector('#uwm-enroll-admins-progress');
+    const enrollAdminsStatusText = shadowRoot.querySelector('#uwm-enroll-admins-status-text');
     const cloneSourceSectionColumn = shadowRoot.querySelector('#uwm-clone-source-section-column');
     const cloneLimitStudents = shadowRoot.querySelector('#uwm-clone-limit-students');
     const cloneAnalyze = shadowRoot.querySelector('#uwm-clone-sections-analyze');
@@ -2259,6 +2309,8 @@
     let observerCleanupRunning = false;
     let removeAdminsPlan = null;
     let removeAdminsRunning = false;
+    let enrollAdminsPlan = null;
+    let enrollAdminsRunning = false;
     let courseCsvScope = null;
     let cloneAnalysisPlan = null;
     let cloneExecutionPlan = null;
@@ -2817,12 +2869,16 @@
       removeAdminsEmailColumn.disabled = adminScopeLocked || !hasCsv;
       removeAdminsAnalyze.disabled = adminScopeLocked || removeAdminsRunning || !hasCsv ||
         !removeAdminsEmailColumn.value || !/^\d+$/.test(adminContextInput.value.trim());
+      enrollAdminsEmailColumn.disabled = adminScopeLocked || !hasCsv;
+      enrollAdminsAnalyze.disabled = adminScopeLocked || enrollAdminsRunning || !hasCsv ||
+        !enrollAdminsEmailColumn.value || !/^\d+$/.test(adminContextInput.value.trim());
     }
 
     async function loadCsvScope(file) {
       resetEnableNavigationAnalysis();
       resetSectionReport();
       resetRemoveAdmins();
+      resetEnrollAdmins();
       csvScope = null;
 
       if (!file) {
@@ -2870,6 +2926,10 @@
         );
         populateColumnSelect(
           removeAdminsEmailColumn,
+          parsed.headers
+        );
+        populateColumnSelect(
+          enrollAdminsEmailColumn,
           parsed.headers
         );
 
@@ -2958,6 +3018,7 @@
     adminContextInput.addEventListener('input', () => {
       resetObserverCleanup();
       resetRemoveAdmins();
+      resetEnrollAdmins();
       scheduleTermsLoad();
     });
     publishedOnlyCheckbox.addEventListener('change', resetObserverCleanup);
@@ -2985,7 +3046,8 @@
       sectionClassNumberColumn,
       enableNavigationToolColumn,
       enableNavigationValueColumn,
-      removeAdminsEmailColumn
+      removeAdminsEmailColumn,
+      enrollAdminsEmailColumn
     ]) {
       select.addEventListener('change', () => {
         if (select === csvCourseColumn) {
@@ -2993,6 +3055,7 @@
         }
         if (select === sectionClassNumberColumn) resetSectionReport();
         else if (select === removeAdminsEmailColumn) resetRemoveAdmins();
+        else if (select === enrollAdminsEmailColumn) resetEnrollAdmins();
         else resetEnableNavigationAnalysis();
         refreshCsvActionAvailability();
       });
@@ -3059,6 +3122,17 @@
       removeAdminsContinue.disabled = false;
       removeAdminsCancel.disabled = false;
       if (!keepStatus) removeAdminsStatus.hidden = true;
+      refreshCsvActionAvailability();
+    }
+
+    function resetEnrollAdmins({ keepStatus = false } = {}) {
+      enrollAdminsPlan = null;
+      enrollAdminsAnalysis.hidden = true;
+      enrollAdminsConfirmation.hidden = true;
+      enrollAdminsRole.innerHTML = '<option value="">Choose a role</option>';
+      enrollAdminsContinue.disabled = true;
+      enrollAdminsCancel.disabled = false;
+      if (!keepStatus) enrollAdminsStatus.hidden = true;
       refreshCsvActionAvailability();
     }
 
@@ -4211,7 +4285,7 @@
       removeAdminsStatusText.textContent = message;
     }
 
-    async function removeAdminsProvisioningRows(accountId) {
+    async function adminProvisioningRows(accountId, onProgress, onDownload) {
       const created = await canvasApi.request(
         `/api/v1/accounts/${encodeURIComponent(accountId)}/reports/provisioning_csv`,
         {
@@ -4226,21 +4300,10 @@
       if (!reportId) throw new Error('Canvas did not return an ID for the admin report.');
 
       const report = await waitForCanvasReport(accountId, reportId, current => {
-        const progress = Number(current.progress);
-        if (Number.isFinite(progress)) {
-          removeAdminsProgress.max = 100;
-          removeAdminsProgress.value = Math.max(0, Math.min(100, progress));
-        } else {
-          removeAdminsProgress.removeAttribute('value');
-          removeAdminsProgress.removeAttribute('max');
-        }
-        showRemoveAdminsStatus(
-          `Canvas admin report: ${current.status || 'queued'}` +
-          `${Number.isFinite(progress) ? ` (${progress}%).` : '.'}`
-        );
+        if (typeof onProgress === 'function') onProgress(current);
       });
 
-      showRemoveAdminsStatus('Downloading the Canvas admin report…');
+      if (typeof onDownload === 'function') onDownload(report);
       const admins = parseCsvText(await canvasReportCsv(report, 'admins.csv'));
       requireCsvHeaders(admins, 'admins.csv', [
         'canvas_user_id',
@@ -4251,6 +4314,27 @@
         'status'
       ]);
       return { reportId, admins: admins.rows };
+    }
+
+    async function removeAdminsProvisioningRows(accountId) {
+      return adminProvisioningRows(
+        accountId,
+        current => {
+          const progress = Number(current.progress);
+          if (Number.isFinite(progress)) {
+            removeAdminsProgress.max = 100;
+            removeAdminsProgress.value = Math.max(0, Math.min(100, progress));
+          } else {
+            removeAdminsProgress.removeAttribute('value');
+            removeAdminsProgress.removeAttribute('max');
+          }
+          showRemoveAdminsStatus(
+            `Canvas admin report: ${current.status || 'queued'}` +
+            `${Number.isFinite(progress) ? ` (${progress}%).` : '.'}`
+          );
+        },
+        () => showRemoveAdminsStatus('Downloading the Canvas admin report…')
+      );
     }
 
     function removeAdminsOutput(plan) {
@@ -4355,7 +4439,7 @@
     }
 
     async function analyzeRemoveAdmins() {
-      if (removeAdminsRunning || navigationReportRunning || shortNameReportRunning ||
+      if (removeAdminsRunning || enrollAdminsRunning || navigationReportRunning || shortNameReportRunning ||
         sectionReportRunning || enableNavigationRunning || observerCleanupRunning ||
         cloneRunning || emailInstructorsRunning || !csvScope) return;
       const accountId = adminContextInput.value.trim();
@@ -4646,6 +4730,510 @@
       removeAdminsAnalyze.focus();
     });
     removeAdminsContinue.addEventListener('click', executeRemoveAdmins);
+
+    function showEnrollAdminsStatus(message, { isError = false } = {}) {
+      enrollAdminsStatus.hidden = false;
+      enrollAdminsStatus.classList.toggle('is-error', isError);
+      enrollAdminsStatusText.textContent = message;
+    }
+
+    async function enrollAdminsAccountTree(accountId) {
+      const [selected, descendants] = await Promise.all([
+        canvasApi.get(`/api/v1/accounts/${encodeURIComponent(accountId)}`),
+        canvasApi.getAll(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/sub_accounts?recursive=true&per_page=100`
+        )
+      ]);
+      const accounts = [selected.data, ...descendants].filter(Boolean).filter(account => (
+        !account.workflow_state || String(account.workflow_state).toLowerCase() === 'active'
+      ));
+      return Array.from(new Map(accounts.map(account => [String(account.id), account])).values());
+    }
+
+    function enrollAdminsAncestorIds(accountId, accountById) {
+      const ids = [];
+      let currentId = String(accountId || '');
+      const visited = new Set();
+      while (currentId && accountById.has(currentId) && !visited.has(currentId)) {
+        visited.add(currentId);
+        ids.push(currentId);
+        currentId = String(accountById.get(currentId)?.parent_account_id || '');
+      }
+      return ids;
+    }
+
+    function enrollAdminsRefreshConfirmation() {
+      const plan = enrollAdminsPlan;
+      const roleId = enrollAdminsRole.value;
+      if (!plan || !roleId) {
+        enrollAdminsContinue.disabled = true;
+        if (plan) enrollAdminsConfirmationText.textContent = 'Choose the admin role to apply.';
+        return;
+      }
+
+      const role = plan.roles.find(candidate => candidate.id === roleId);
+      let createCount = 0;
+      let alreadyCount = 0;
+      let peopleCount = 0;
+      for (const person of plan.people) {
+        let personCreates = 0;
+        const existingAccounts = new Set(
+          plan.adminRows
+            .filter(row => String(row.canvas_user_id) === String(person.user?.id) &&
+              String(row.role_id) === roleId && String(row.status).toLowerCase() === 'active')
+            .map(row => String(row.canvas_account_id))
+        );
+        for (const placement of person.placements) {
+          const coveringAccountId = enrollAdminsAncestorIds(placement.account.id, plan.accountById)
+            .find(id => existingAccounts.has(id));
+          placement.roleId = roleId;
+          placement.role = role?.label || '';
+          placement.coveringAccountId = coveringAccountId || '';
+          placement.status = coveringAccountId ? 'already_admin' : 'will_create';
+          placement.error = '';
+          if (coveringAccountId) alreadyCount++;
+          else {
+            createCount++;
+            personCreates++;
+          }
+        }
+        if (personCreates) peopleCount++;
+      }
+      plan.roleId = roleId;
+      plan.role = role?.label || '';
+      enrollAdminsConfirmationText.textContent = createCount
+        ? `Create ${createCount} ${role?.label || 'admin'} assignment(s) for ${peopleCount} ` +
+          `person(s) at their highest safe subaccounts? ${alreadyCount} placement(s) are already ` +
+          'covered by this role and will not be duplicated. Canvas notification emails will not be sent.'
+        : `Every safe placement is already covered by the ${role?.label || 'selected'} role. ` +
+          'No new admin assignments are needed.';
+      enrollAdminsContinue.disabled = createCount === 0;
+    }
+
+    function enrollAdminsOutput(plan) {
+      const completedAt = new Date().toISOString();
+      const generatedColumns = [
+        'input.row',
+        'match.email',
+        'match.user_field',
+        'user.id',
+        'user.sis_user_id',
+        'user.integration_id',
+        'user.name',
+        'user.login_id',
+        'user.email',
+        'account.id',
+        'account.sis_account_id',
+        'account.name',
+        'account.parent_account_id',
+        'role.id',
+        'role.name',
+        'scope.blocked_account_ids',
+        'scope.active_student_course_ids',
+        'run.report_id',
+        'run.action',
+        'run.completed_at',
+        'run.status',
+        'run.covered_by_account_id',
+        'run.error'
+      ];
+      const columnNames = [...plan.sourceHeaders];
+      for (const key of generatedColumns) {
+        if (!columnNames.includes(key)) columnNames.push(key);
+      }
+      const rows = [];
+      for (const entry of plan.inputEntries) {
+        const person = entry.person;
+        if (person?.placements.length) {
+          for (const placement of person.placements) {
+            rows.push({
+              ...entry.row,
+              'match.email': entry.email,
+              'match.user_field': person.matchedField,
+              'user.id': person.user.id ?? '',
+              'user.sis_user_id': person.user.sis_user_id ?? '',
+              'user.integration_id': person.user.integration_id ?? '',
+              'user.name': person.user.name ?? '',
+              'user.login_id': person.user.login_id ?? '',
+              'user.email': person.user.email ?? '',
+              'account.id': placement.account.id ?? '',
+              'account.sis_account_id': placement.account.sis_account_id ?? '',
+              'account.name': placement.account.name ?? '',
+              'account.parent_account_id': placement.account.parent_account_id ?? '',
+              'role.id': placement.roleId || plan.roleId || '',
+              'role.name': placement.role || plan.role || '',
+              'scope.blocked_account_ids': person.blockedAccountIds.join('|'),
+              'scope.active_student_course_ids': person.activeCourseIds.join('|'),
+              'run.report_id': plan.reportId,
+              'run.action': 'enroll_account_admin',
+              'run.completed_at': completedAt,
+              'run.status': placement.status,
+              'run.covered_by_account_id': placement.coveringAccountId || '',
+              'run.error': placement.error || ''
+            });
+          }
+        } else {
+          rows.push({
+            ...entry.row,
+            'match.email': entry.email,
+            'match.user_field': person?.matchedField || '',
+            'user.id': person?.user?.id ?? '',
+            'user.sis_user_id': person?.user?.sis_user_id ?? '',
+            'user.integration_id': person?.user?.integration_id ?? '',
+            'user.name': person?.user?.name ?? '',
+            'user.login_id': person?.user?.login_id ?? '',
+            'user.email': person?.user?.email ?? '',
+            'account.id': '',
+            'account.sis_account_id': '',
+            'account.name': '',
+            'account.parent_account_id': '',
+            'role.id': plan.roleId || '',
+            'role.name': plan.role || '',
+            'scope.blocked_account_ids': person?.blockedAccountIds?.join('|') || '',
+            'scope.active_student_course_ids': person?.activeCourseIds?.join('|') || '',
+            'run.report_id': plan.reportId,
+            'run.action': 'enroll_account_admin',
+            'run.completed_at': completedAt,
+            'run.status': person ? 'no_safe_account' : entry.status,
+            'run.covered_by_account_id': '',
+            'run.error': entry.error || ''
+          });
+        }
+      }
+      return { rows, columns: columnNames.map(key => ({ key, label: key })) };
+    }
+
+    async function analyzeEnrollAdmins() {
+      if (enrollAdminsRunning || removeAdminsRunning || navigationReportRunning ||
+        shortNameReportRunning || sectionReportRunning || enableNavigationRunning ||
+        observerCleanupRunning || cloneRunning || emailInstructorsRunning || !csvScope) return;
+      const accountId = adminContextInput.value.trim();
+      if (!/^\d+$/.test(accountId)) {
+        adminContextInput.setCustomValidity('Enter a numeric Canvas account ID.');
+        adminContextInput.reportValidity();
+        adminContextInput.focus();
+        return;
+      }
+      const emailColumn = enrollAdminsEmailColumn.value;
+      if (!emailColumn) {
+        showEnrollAdminsStatus('Choose the CSV email address column first.', { isError: true });
+        enrollAdminsEmailColumn.focus();
+        return;
+      }
+
+      enrollAdminsRunning = true;
+      enrollAdminsPlan = null;
+      enrollAdminsAnalysis.hidden = true;
+      enrollAdminsConfirmation.hidden = true;
+      enrollAdminsProgress.removeAttribute('value');
+      enrollAdminsProgress.removeAttribute('max');
+      setDrawerOperationLock(true, enrollAdminsAnalyze);
+      setAdminScopeLocked(true);
+      showEnrollAdminsStatus('Reading email addresses and loading the Account tree…');
+
+      try {
+        const firstByEmail = new Map();
+        const inputEntries = csvScope.rows.map(row => {
+          const rawEmail = String(row[emailColumn] || '').trim();
+          const email = normalizedAdminEmail(rawEmail);
+          const entry = { row: { ...row }, email, status: 'candidate', error: '', person: null };
+          if (!email) {
+            entry.status = 'invalid_email';
+            entry.error = rawEmail ? `Not a valid email address: ${rawEmail}` : 'Email address is blank.';
+          } else if (firstByEmail.has(email)) {
+            entry.status = 'duplicate_input';
+            entry.error = `Duplicates input row ${firstByEmail.get(email).row['input.row']}.`;
+          } else {
+            firstByEmail.set(email, entry);
+          }
+          return entry;
+        });
+        const targetEmails = Array.from(firstByEmail.keys());
+        if (!targetEmails.length) {
+          throw new Error('The selected CSV column does not contain any valid email addresses.');
+        }
+
+        const [accounts, provisioning] = await Promise.all([
+          enrollAdminsAccountTree(accountId),
+          adminProvisioningRows(
+            accountId,
+            current => {
+              const progress = Number(current.progress);
+              showEnrollAdminsStatus(
+                `Canvas admin report: ${current.status || 'queued'}` +
+                `${Number.isFinite(progress) ? ` (${progress}%).` : '.'}`
+              );
+            },
+            () => showEnrollAdminsStatus('Downloading the Canvas admin report…')
+          )
+        ]);
+        const accountById = new Map(accounts.map(account => [String(account.id), account]));
+        if (!accountById.has(accountId)) throw new Error('Canvas did not return the selected Account.');
+
+        const rolesById = new Map();
+        for (const row of provisioning.admins) {
+          const roleId = String(row.role_id || '').trim();
+          if (roleId && String(row.status).toLowerCase() === 'active') {
+            rolesById.set(roleId, { id: roleId, label: row.role || `Role ${roleId}` });
+          }
+        }
+        const roles = Array.from(rolesById.values()).sort((left, right) => (
+          left.label.localeCompare(right.label, undefined, { sensitivity: 'base' })
+        ));
+        if (!roles.length) throw new Error('The Canvas admin report did not contain an assignable role.');
+
+        enrollAdminsProgress.max = targetEmails.length;
+        enrollAdminsProgress.value = 0;
+        let completedUsers = 0;
+        const people = [];
+        await Promise.all(targetEmails.map(async email => {
+          const source = firstByEmail.get(email);
+          try {
+            const params = new URLSearchParams({ search_term: email, per_page: '100' });
+            params.append('include[]', 'email');
+            const users = await canvasApi.getAll(
+              `/api/v1/accounts/${encodeURIComponent(accountId)}/users?${params.toString()}`
+            );
+            const exact = users.map(user => {
+              const fields = [
+                ['email', user.email],
+                ['integration_id', user.integration_id],
+                ['login_id', user.login_id]
+              ];
+              const matched = fields.find(([, value]) => normalizedAdminEmail(value) === email);
+              return matched ? { user, matchedField: matched[0] } : null;
+            }).filter(Boolean);
+            if (!exact.length) {
+              source.status = 'no_user_match';
+              source.error = 'No exact Canvas user match was found.';
+              return;
+            }
+            if (exact.length > 1) {
+              source.status = 'ambiguous_user';
+              source.error = `${exact.length} Canvas users matched this email exactly.`;
+              return;
+            }
+
+            const person = {
+              source,
+              user: exact[0].user,
+              matchedField: exact[0].matchedField,
+              activeCourseIds: [],
+              blockedAccountIds: [],
+              placements: []
+            };
+            source.person = person;
+            people.push(person);
+            const enrollmentParams = new URLSearchParams({ per_page: '100' });
+            enrollmentParams.append('type[]', 'StudentEnrollment');
+            enrollmentParams.append('state[]', 'active');
+            const enrollments = await canvasApi.getAll(
+              `/api/v1/users/${encodeURIComponent(String(person.user.id))}/enrollments?` +
+              enrollmentParams.toString()
+            );
+            person.activeCourseIds = Array.from(new Set(
+              enrollments.map(enrollment => String(enrollment.course_id || '')).filter(Boolean)
+            ));
+          } finally {
+            completedUsers++;
+            enrollAdminsProgress.value = completedUsers;
+            showEnrollAdminsStatus(
+              `Matching people and active Student enrollments: ${completedUsers} of ${targetEmails.length}.`
+            );
+          }
+        }));
+
+        const allCourseIds = Array.from(new Set(people.flatMap(person => person.activeCourseIds)));
+        const courseById = new Map();
+        enrollAdminsProgress.max = Math.max(1, allCourseIds.length);
+        enrollAdminsProgress.value = 0;
+        let completedCourses = 0;
+        await Promise.all(allCourseIds.map(async courseId => {
+          try {
+            const result = await canvasApi.get(`/api/v1/courses/${encodeURIComponent(courseId)}`);
+            if (!result.data?.id || !String(result.data.account_id || '').trim()) {
+              throw new Error(`Canvas course ${courseId} did not return its Account ID.`);
+            }
+            courseById.set(courseId, result.data);
+          } finally {
+            completedCourses++;
+            enrollAdminsProgress.value = completedCourses;
+            showEnrollAdminsStatus(
+              `Locating Student courses in the Account tree: ${completedCourses} of ${allCourseIds.length}.`
+            );
+          }
+        }));
+
+        for (const person of people) {
+          const blocked = new Set();
+          for (const courseId of person.activeCourseIds) {
+            const courseAccountId = String(courseById.get(courseId)?.account_id || '');
+            if (!accountById.has(courseAccountId)) continue;
+            for (const ancestorId of enrollAdminsAncestorIds(courseAccountId, accountById)) {
+              blocked.add(ancestorId);
+              if (ancestorId === accountId) break;
+            }
+          }
+          person.blockedAccountIds = Array.from(blocked);
+          person.placements = accounts
+            .filter(account => {
+              const id = String(account.id);
+              if (blocked.has(id)) return false;
+              const parentId = String(account.parent_account_id || '');
+              return id === accountId || !accountById.has(parentId) || blocked.has(parentId);
+            })
+            .map(account => ({
+              account,
+              roleId: '',
+              role: '',
+              coveringAccountId: '',
+              status: 'pending_role',
+              error: ''
+            }));
+        }
+
+        const placementCount = people.reduce((sum, person) => sum + person.placements.length, 0);
+        const noMatchCount = inputEntries.filter(entry => entry.status === 'no_user_match').length;
+        const ambiguousCount = inputEntries.filter(entry => entry.status === 'ambiguous_user').length;
+        const invalidCount = inputEntries.filter(entry => entry.status === 'invalid_email').length;
+        const duplicateCount = inputEntries.filter(entry => entry.status === 'duplicate_input').length;
+        const fanOutSummary = people.slice(0, 8).map(person => (
+          `${person.user.name || person.source.email}: ${person.placements.length}`
+        )).join('; ');
+        enrollAdminsPlan = {
+          accountId,
+          sourceFileName: csvScope.fileName,
+          sourceHeaders: [...csvScope.headers],
+          emailColumn,
+          inputEntries,
+          people,
+          accounts,
+          accountById,
+          adminRows: provisioning.admins,
+          reportId: provisioning.reportId,
+          roles,
+          roleId: '',
+          role: ''
+        };
+        enrollAdminsAnalysisText.textContent =
+          `${placementCount} highest-safe placement(s) found for ${people.length} person(s). ` +
+          `${noMatchCount} unmatched, ${ambiguousCount} ambiguous, ${invalidCount} invalid, and ` +
+          `${duplicateCount} duplicate input row(s). Large sibling branches are intentionally ` +
+          `expanded when their parent is blocked.${fanOutSummary ? ` Placements by person: ` +
+            `${fanOutSummary}${people.length > 8 ? `; plus ${people.length - 8} more.` : '.'}` : ''}`;
+        enrollAdminsAnalysis.hidden = false;
+        enrollAdminsRole.innerHTML = '<option value="">Choose a role</option>';
+        for (const role of roles) {
+          const option = document.createElement('option');
+          option.value = role.id;
+          option.textContent = `${role.label} — role ${role.id}`;
+          enrollAdminsRole.appendChild(option);
+        }
+        enrollAdminsConfirmation.hidden = false;
+        enrollAdminsRefreshConfirmation();
+        showEnrollAdminsStatus(
+          `Read-only review complete from Canvas report ${provisioning.reportId}. ` +
+          'No admin assignments have been changed.'
+        );
+        enrollAdminsRole.focus();
+      } catch (error) {
+        console.error('Enroll admins review failed.', error);
+        enrollAdminsPlan = null;
+        showEnrollAdminsStatus(`Review stopped: ${error.message}`, { isError: true });
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      } finally {
+        enrollAdminsRunning = false;
+        refreshCsvActionAvailability();
+      }
+    }
+
+    async function executeEnrollAdmins() {
+      const plan = enrollAdminsPlan;
+      if (!plan || enrollAdminsRunning || !plan.roleId) return;
+      const placements = plan.people.flatMap(person => person.placements)
+        .filter(placement => placement.status === 'will_create');
+      if (!placements.length) return;
+
+      enrollAdminsRunning = true;
+      setDrawerOperationLock(true, enrollAdminsContinue);
+      enrollAdminsConfirmation.hidden = true;
+      enrollAdminsContinue.disabled = true;
+      enrollAdminsCancel.disabled = true;
+      enrollAdminsProgress.max = placements.length;
+      enrollAdminsProgress.value = 0;
+      let completed = 0;
+      let created = 0;
+      let failed = 0;
+      showEnrollAdminsStatus(`Creating admin assignments: 0 of ${placements.length}.`);
+
+      try {
+        await Promise.all(plan.people.flatMap(person => person.placements.map(placement => (
+          { person, placement }
+        ))).filter(item => item.placement.status === 'will_create').map(async item => {
+          try {
+            await canvasApi.request(
+              `/api/v1/accounts/${encodeURIComponent(String(item.placement.account.id))}/admins`,
+              {
+                method: 'POST',
+                body: {
+                  user_id: String(item.person.user.id),
+                  role_id: plan.roleId,
+                  send_confirmation: 'false'
+                }
+              }
+            );
+            item.placement.status = 'created';
+            created++;
+          } catch (error) {
+            item.placement.status = 'error';
+            item.placement.error = error.message;
+            failed++;
+          } finally {
+            completed++;
+            enrollAdminsProgress.value = completed;
+            showEnrollAdminsStatus(
+              `Creating admin assignments: ${completed} of ${placements.length}. ` +
+              `Created: ${created}. Errors: ${failed}.`,
+              { isError: failed > 0 }
+            );
+          }
+        }));
+        downloadCsv({
+          ...enrollAdminsOutput(plan),
+          filename: `admin-enroll.acct-${plan.accountId}.${timestampForFilename()}.csv`
+        });
+        enrollAdminsAnalysisText.textContent =
+          `${created} admin assignment(s) created; ${failed} error(s).`;
+        enrollAdminsAnalysis.hidden = false;
+        showEnrollAdminsStatus(
+          `Complete. ${created} admin assignment(s) created; ${failed} error(s). Results CSV downloaded.`,
+          { isError: failed > 0 }
+        );
+      } catch (error) {
+        console.error('Enroll admins action failed.', error);
+        showEnrollAdminsStatus(`Enrollment stopped: ${error.message}`, { isError: true });
+      } finally {
+        enrollAdminsRunning = false;
+        enrollAdminsPlan = null;
+        enrollAdminsContinue.disabled = false;
+        enrollAdminsCancel.disabled = false;
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      }
+    }
+
+    enrollAdminsAnalyze.addEventListener('click', analyzeEnrollAdmins);
+    enrollAdminsRole.addEventListener('change', enrollAdminsRefreshConfirmation);
+    enrollAdminsCancel.addEventListener('click', () => {
+      if (enrollAdminsRunning) return;
+      enrollAdminsPlan = null;
+      enrollAdminsConfirmation.hidden = true;
+      setDrawerOperationLock(false);
+      setAdminScopeLocked(false);
+      enrollAdminsAnalyze.focus();
+    });
+    enrollAdminsContinue.addEventListener('click', executeEnrollAdmins);
 
     function courseApiIdentifier(value, idType) {
       const identifier = String(value ?? '').trim();

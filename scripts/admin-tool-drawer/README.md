@@ -176,6 +176,31 @@ results CSV preserves the uploaded columns and adds `match.*`, `account.*`, `use
 `run.*` fields. The canonical action is `remove_account_admin`; the compact filename is
 `admin-remove.acct-<account-id>.<timestamp>.csv`.
 
+### Enroll admins
+
+Under **Account → People**, **Enroll admins** uses the shared Account CSV input and an
+action-specific **Email address column**. No column is selected automatically. The read-only review
+matches each address exactly to one Canvas user, loads that person's active `StudentEnrollment`
+records, and locates the Canvas Account that owns each course.
+
+For each person, every Account containing an active Student course is blocked, as is every ancestor
+of that Account up to the selected Account. Blocking an Account does not block its descendants. A
+course housed directly in a college therefore blocks the college while leaving its unaffected child
+schools eligible. Likewise, when one department blocks a large college, its unaffected sibling
+departments remain eligible. The tool creates a placement at every safe Account whose parent is
+blocked, producing the smallest set of highest-safe roots that covers all eligible branches.
+
+The Account hierarchy comes from the recursive Subaccounts API. One Provisioning `admins.csv`
+report supplies existing assignments and the available admin role labels and IDs. After placement
+analysis, the user must choose an admin role; nothing is selected automatically. Existing coverage
+by that same role at a placement or one of its ancestors is reported and is not duplicated. The
+review states the total placement fan-out before presenting one confirmation.
+
+Confirmed assignments use the Admins API with notification emails suppressed. The results CSV
+preserves the uploaded fields and adds `match.*`, `user.*`, `account.*`, `role.*`, `scope.*`, and
+`run.*` fields. Its canonical action is `enroll_account_admin`; the compact filename is
+`admin-enroll.acct-<account-id>.<timestamp>.csv`.
+
 ### Show or hide course navigation
 
 The **Show or hide course navigation** action requires four action-specific mappings:
