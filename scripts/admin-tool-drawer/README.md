@@ -128,8 +128,15 @@ CSV supplies source sections through an explicitly selected Canvas section ID co
 drawer's section-match report, that field is `section.id`; `section.sis_section_id` is the SIS value
 and is not accepted by this action. A holding-tank Canvas course ID is required. It is a shared
 Course-context scope field rather than an action-specific parameter, persists for the current Canvas
-site, and is available to other Course tools that need temporary staging. The read-only analysis
-resolves every unique
+site, and is available to other Course tools that need temporary staging. The accordion presents the
+workflow as **Choose source sections**, **Choose enrollment options**, and **Review and run**. The
+administrator clicks **Review sync** once; analysis then opens the final review automatically with
+student enrollments selected by default. Changing a role or the FERPA section-limit option updates
+that review immediately. **Run sync** is the only write confirmation—there is no separate prepare
+step. Progress and completion use visibly different states, and a completed run remains clearly
+marked after its results CSV downloads.
+
+The read-only analysis resolves every unique
 source section, loads all active and invited section enrollments with common pagination, validates the
 destination and holding courses, and discovers the exact Canvas enrollment roles present in the
 source or an existing managed clone. Student-based roles are selected by default; custom roles retain

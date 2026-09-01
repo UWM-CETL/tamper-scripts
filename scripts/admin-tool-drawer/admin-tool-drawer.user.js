@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.14.0
+// @version      0.14.1
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1462,6 +1462,33 @@
           margin: 7px 0 0;
         }
 
+        .workflow-heading {
+          color: var(--uwm-text);
+          font-size: 0.86rem;
+          font-weight: 800;
+          line-height: 1.3;
+          margin: 0;
+        }
+
+        .clone-stage {
+          margin-top: 14px;
+        }
+
+        .clone-stage + .clone-stage {
+          border-top: 1px solid rgb(255 247 237 / 14%);
+          padding-top: 14px;
+        }
+
+        .clone-stage .mapping-grid {
+          margin-top: 9px;
+        }
+
+        .clone-note {
+          border-left: 3px solid rgb(244 185 66 / 55%);
+          margin-top: 10px;
+          padding-left: 9px;
+        }
+
         .action-accordions {
           display: grid;
           gap: 8px;
@@ -1539,6 +1566,19 @@
           padding: 10px;
         }
 
+        .clone-review {
+          background: transparent;
+          border: 0;
+          border-top: 1px solid rgb(255 247 237 / 14%);
+          border-radius: 0;
+          margin-top: 15px;
+          padding: 14px 0 0;
+        }
+
+        .clone-review > .workflow-heading {
+          margin-bottom: 8px;
+        }
+
         .analysis-summary p {
           color: var(--uwm-muted);
           font-size: 0.78rem;
@@ -1606,6 +1646,11 @@
           margin: 0;
         }
 
+        .confirmation .workflow-heading,
+        .run-status .workflow-heading {
+          margin-bottom: 7px;
+        }
+
         .confirmation-actions {
           display: flex;
           gap: 8px;
@@ -1653,6 +1698,20 @@
 
         .run-status.is-error p {
           color: #ffd8dc;
+        }
+
+        .run-status[data-state="success"] {
+          background: rgb(33 113 74 / 24%);
+          border-color: rgb(102 204 153 / 58%);
+        }
+
+        .run-status[data-state="success"] .workflow-heading,
+        .run-status[data-state="success"] p {
+          color: #d8f7e7;
+        }
+
+        .run-status[data-state="working"] .workflow-heading {
+          color: var(--uwm-warning);
         }
 
         .is-open .backdrop {
@@ -1930,40 +1989,51 @@
                       <span class="accordion-chevron" aria-hidden="true">›</span>
                     </button>
                     <div class="action-accordion-panel" id="uwm-clone-sections-panel" role="region" aria-labelledby="uwm-clone-sections-trigger" hidden>
-                      <p class="tool-description">Creates or synchronizes section clones from the uploaded CSV into this destination course. Analysis is read-only until the change plan is confirmed.</p>
-                      <div class="mapping-grid">
-                        <label class="field-label" for="uwm-clone-source-section-column">
-                          Canvas section ID column
-                          <select class="field-select" id="uwm-clone-source-section-column" disabled></select>
+                      <p class="tool-description">Copy or refresh source sections and their selected enrollments in this course.</p>
+
+                      <section class="clone-stage" aria-labelledby="uwm-clone-source-heading">
+                        <h4 class="workflow-heading" id="uwm-clone-source-heading">1. Choose the source sections</h4>
+                        <div class="mapping-grid">
+                          <label class="field-label" for="uwm-clone-source-section-column">
+                            CSV column containing Canvas section IDs
+                            <select class="field-select" id="uwm-clone-source-section-column" disabled></select>
+                          </label>
+                        </div>
+                        <p class="tool-description clone-note">Use <code>section.id — Canvas section ID</code> from a section-match report.</p>
+                      </section>
+
+                      <section class="clone-stage" aria-labelledby="uwm-clone-options-heading">
+                        <h4 class="workflow-heading" id="uwm-clone-options-heading">2. Choose enrollment options</h4>
+                        <label class="scope-label" for="uwm-clone-limit-students" style="margin-top: 9px;">
+                          <input class="scope-checkbox" id="uwm-clone-limit-students" type="checkbox" checked>
+                          <span>Keep students limited to their cloned section</span>
                         </label>
-                      </div>
-                      <p class="tool-description">For a section-match report created by this drawer, choose <code>section.id — Canvas section ID</code>. The similarly named <code>section.sis_section_id</code> column is not the Canvas ID.</p>
-                      <label class="scope-label" for="uwm-clone-limit-students" style="margin-top: 11px;">
-                        <input class="scope-checkbox" id="uwm-clone-limit-students" type="checkbox" checked>
-                        <span>Limit students to their cloned section</span>
-                      </label>
-                      <p class="tool-description">Clone identity uses the exact <code>[src Canvas-section-ID]</code> name marker and the holding course recorded by Canvas after cross-listing. Source SIS IDs and dates are not copied. Notifications are always suppressed.</p>
-                      <button class="action-button" id="uwm-clone-sections-analyze" type="button" disabled>Analyze sections</button>
+                        <p class="tool-description">Student notifications stay off. Student section limits are on by default for FERPA protection.</p>
+                      </section>
 
-                      <div class="analysis-summary" id="uwm-clone-sections-analysis" hidden>
+                      <button class="action-button" id="uwm-clone-sections-analyze" type="button" disabled>Review sync</button>
+
+                      <div class="analysis-summary clone-review" id="uwm-clone-sections-analysis" hidden>
+                        <h4 class="workflow-heading">3. Review and run</h4>
                         <p id="uwm-clone-sections-analysis-text"></p>
-                      </div>
 
-                      <fieldset class="role-selector" id="uwm-clone-role-selector" hidden>
-                        <legend>Enrollment roles to synchronize</legend>
-                        <div id="uwm-clone-role-options"></div>
-                      </fieldset>
-                      <button class="action-button secondary" id="uwm-clone-sections-prepare" type="button" hidden disabled>Prepare selected roles</button>
+                        <fieldset class="role-selector" id="uwm-clone-role-selector" hidden>
+                          <legend>Enrollments to synchronize</legend>
+                          <div id="uwm-clone-role-options"></div>
+                        </fieldset>
 
-                      <div class="confirmation" id="uwm-clone-sections-confirmation" hidden>
-                        <p id="uwm-clone-sections-confirmation-text"></p>
-                        <div class="confirmation-actions">
-                          <button class="confirmation-button primary" id="uwm-clone-sections-continue" type="button">Apply section sync</button>
-                          <button class="confirmation-button" id="uwm-clone-sections-cancel" type="button">Cancel</button>
+                        <div class="confirmation" id="uwm-clone-sections-confirmation" hidden>
+                          <h4 class="workflow-heading">Ready to sync</h4>
+                          <p id="uwm-clone-sections-confirmation-text"></p>
+                          <div class="confirmation-actions">
+                            <button class="confirmation-button primary" id="uwm-clone-sections-continue" type="button">Run sync</button>
+                            <button class="confirmation-button" id="uwm-clone-sections-cancel" type="button">Start over</button>
+                          </div>
                         </div>
                       </div>
 
-                      <div class="run-status" id="uwm-clone-sections-status" role="status" aria-live="polite" hidden>
+                      <div class="run-status" id="uwm-clone-sections-status" role="status" aria-live="polite" data-state="working" hidden>
+                        <h4 class="workflow-heading" id="uwm-clone-sections-status-heading">Working</h4>
                         <progress class="run-progress" id="uwm-clone-sections-progress"></progress>
                         <p id="uwm-clone-sections-status-text"></p>
                       </div>
@@ -2048,12 +2118,12 @@
     const cloneAnalysisText = shadowRoot.querySelector('#uwm-clone-sections-analysis-text');
     const cloneRoleSelector = shadowRoot.querySelector('#uwm-clone-role-selector');
     const cloneRoleOptions = shadowRoot.querySelector('#uwm-clone-role-options');
-    const clonePrepare = shadowRoot.querySelector('#uwm-clone-sections-prepare');
     const cloneConfirmation = shadowRoot.querySelector('#uwm-clone-sections-confirmation');
     const cloneConfirmationText = shadowRoot.querySelector('#uwm-clone-sections-confirmation-text');
     const cloneContinue = shadowRoot.querySelector('#uwm-clone-sections-continue');
     const cloneCancel = shadowRoot.querySelector('#uwm-clone-sections-cancel');
     const cloneStatus = shadowRoot.querySelector('#uwm-clone-sections-status');
+    const cloneStatusHeading = shadowRoot.querySelector('#uwm-clone-sections-status-heading');
     const cloneProgress = shadowRoot.querySelector('#uwm-clone-sections-progress');
     const cloneStatusText = shadowRoot.querySelector('#uwm-clone-sections-status-text');
 
@@ -2340,8 +2410,6 @@
       cloneAnalysis.hidden = true;
       cloneRoleSelector.hidden = true;
       cloneRoleOptions.replaceChildren();
-      clonePrepare.hidden = true;
-      clonePrepare.disabled = true;
       cloneConfirmation.hidden = true;
       cloneContinue.disabled = false;
       cloneCancel.disabled = false;
@@ -2365,11 +2433,7 @@
       courseCsvFileInput.disabled = courseScopeLocked;
       cloneAnalyze.disabled = courseScopeLocked || cloneRunning || !hasCsv ||
         !cloneSourceSectionColumn.value || !destinationIsValid || !holdingIsValid;
-      if (!clonePrepare.hidden) {
-        clonePrepare.disabled = courseScopeLocked || cloneRunning || (
-          Boolean(cloneAnalysisPlan?.roles.length) && !selectedCloneRoleKeys().size
-        );
-      }
+      cloneContinue.disabled = courseScopeLocked || cloneRunning || !cloneExecutionPlan;
     }
 
     function setCourseScopeLocked(isLocked) {
@@ -2588,10 +2652,7 @@
       });
     }
     cloneLimitStudents.addEventListener('change', () => {
-      cloneExecutionPlan = null;
-      cloneConfirmation.hidden = true;
-      cloneContinue.disabled = false;
-      cloneCancel.disabled = false;
+      if (cloneAnalysisPlan) refreshCloneExecutionReview();
     });
     for (const select of [
       csvCourseColumn,
@@ -3577,9 +3638,11 @@
 
     enableNavigationContinue.addEventListener('click', executeEnableNavigation);
 
-    function showCloneStatus(message, { isError = false } = {}) {
+    function showCloneStatus(message, { isError = false, state = null, heading = '' } = {}) {
       cloneStatus.hidden = false;
       cloneStatus.classList.toggle('is-error', isError);
+      if (state || isError) cloneStatus.dataset.state = isError ? 'error' : state;
+      if (heading) cloneStatusHeading.textContent = heading;
       cloneStatusText.textContent = message;
     }
 
@@ -3760,14 +3823,10 @@
         label.append(checkbox, text);
         cloneRoleOptions.appendChild(label);
         checkbox.addEventListener('change', () => {
-          cloneExecutionPlan = null;
-          cloneConfirmation.hidden = true;
-          clonePrepare.disabled = roles.length > 0 && !selectedCloneRoleKeys().size;
+          refreshCloneExecutionReview();
         });
       }
       cloneRoleSelector.hidden = roles.length === 0;
-      clonePrepare.hidden = false;
-      clonePrepare.disabled = roles.length > 0 && !selectedCloneRoleKeys().size;
     }
 
     function classifyClone(entry, destinationSections, holdingSections, holdingCourseId) {
@@ -3807,7 +3866,7 @@
       entry.cloneSection = null;
     }
 
-    function cloneAnalysisSummary(entries, sourceReadStats = null) {
+    function cloneAnalysisSummary(entries) {
       const uniqueEntries = entries.filter(entry => entry.status !== 'duplicate_source');
       const count = state => uniqueEntries.filter(entry => entry.cloneState === state).length;
       const errors = uniqueEntries.filter(entry => entry.status && entry.status !== 'ready').length;
@@ -3816,16 +3875,10 @@
         (total, entry) => total + (entry.sourceEnrollments?.length || 0),
         0
       );
-      const sourceReadText = sourceReadStats
-        ? ` Source reads: ${sourceReadStats.reportSections} from ` +
-          `${sourceReadStats.reportGroups} Canvas enrollment report(s), ` +
-          `${sourceReadStats.directSections} through direct section API fallback.`
-        : '';
-      return `${uniqueEntries.length} unique source section(s): ${count('new')} new, ` +
-        `${count('existing')} already in the destination, ${count('resumable')} resumable in the ` +
-        `holding course, ${count('ambiguous')} ambiguous. ${enrollments} active or invited ` +
-        `source enrollment(s) found; ${duplicates} repeated CSV row(s) deduplicated; ` +
-        `${errors} blocked section(s).${sourceReadText}`;
+      return `${uniqueEntries.length} sections checked: ${count('new')} new, ` +
+        `${count('existing')} already here, ${count('resumable')} waiting in the holding course, ` +
+        `and ${errors} needing attention. ${enrollments} active or invited enrollments found` +
+        `${duplicates ? `; ${duplicates} repeated CSV rows ignored` : ''}.`;
     }
 
     async function analyzeCloneSections() {
@@ -3851,7 +3904,10 @@
       cloneProgress.removeAttribute('value');
       cloneProgress.removeAttribute('max');
       setCourseScopeLocked(true);
-      showCloneStatus('Validating the destination, holding course, and source sections…');
+      showCloneStatus('Checking the destination, holding course, and source sections…', {
+        state: 'working',
+        heading: 'Checking your sync'
+      });
 
       try {
         const [destinationResult, holdingResult, destinationSections, holdingSections] =
@@ -4046,24 +4102,25 @@
           roles,
           sourceReadStats
         };
-        cloneAnalysisText.textContent = cloneAnalysisSummary(entries, sourceReadStats);
+        cloneAnalysisText.textContent = cloneAnalysisSummary(entries);
         cloneAnalysis.hidden = false;
         renderCloneRoleOptions(roles);
-        showCloneStatus(
-          `Read-only analysis complete: ${sourceReadStats.reportSections} source section(s) ` +
-          `loaded from Canvas enrollment reports and ${sourceReadStats.directSections} through ` +
-          `direct API reads. Select the roles to synchronize.`
-        );
+        refreshCloneExecutionReview();
+        cloneStatus.hidden = true;
       } catch (error) {
         console.error('Section clone analysis failed.', error);
         resetCloneAnalysis({ keepStatus: true });
         cloneProgress.removeAttribute('value');
         cloneProgress.removeAttribute('max');
-        showCloneStatus(`Analysis stopped: ${error.message}`, { isError: true });
+        showCloneStatus(`Analysis stopped: ${error.message}`, {
+          isError: true,
+          heading: 'Couldn’t review this sync'
+        });
       } finally {
         cloneRunning = false;
         setCourseScopeLocked(false);
         refreshCloneAvailability();
+        if (cloneExecutionPlan) cloneContinue.focus();
       }
     }
 
@@ -4146,43 +4203,40 @@
       };
     }
 
-    function prepareCloneExecution() {
+    function refreshCloneExecutionReview() {
       const plan = buildCloneExecutionPlan();
       if (!plan) {
-        showCloneStatus('Select at least one enrollment role before preparing the sync.', {
-          isError: true
-        });
+        cloneExecutionPlan = null;
+        cloneConfirmation.hidden = false;
+        cloneConfirmationText.textContent = 'Select at least one enrollment role to continue.';
+        cloneContinue.disabled = true;
         return;
       }
       const counts = cloneExecutionCounts(plan);
       if (!counts.ready) {
-        showCloneStatus('No unambiguous source sections are available to synchronize.', {
-          isError: true
-        });
+        cloneExecutionPlan = null;
+        cloneConfirmation.hidden = false;
+        cloneConfirmationText.textContent =
+          'Nothing can be synchronized yet. Review the sections needing attention in the results.';
+        cloneContinue.disabled = true;
         return;
       }
       cloneExecutionPlan = plan;
-      const removalWarning = counts.removals
-        ? ` ${counts.removals} enrollment(s) will be deleted from managed clone sections.`
-        : '';
       cloneConfirmationText.textContent =
-        `Synchronize ${counts.ready} section(s) into course ${plan.destinationCourseId}: ` +
-        `${counts.newSections} new, ${counts.resumedSections} resumed, ${counts.existingSections} ` +
-        `already in the destination; ${counts.adds} enrollment(s) added, ${counts.updates} student ` +
-        `section-limit setting(s) updated, ${counts.removals} removed, ` +
-        `${counts.unchanged} unchanged, ${counts.renamedSections} section name update(s), and ` +
-        `${counts.deduplicated} repeated CSV row(s) deduplicated, and ${counts.blocked} blocked ` +
-        `CSV row(s). Notifications will not be sent.${removalWarning} ` +
-        `${counts.existingMoves} existing clone(s) with changes will be temporarily returned to ` +
-        `holding course ${plan.holdingCourseId}, updated there, and cross-listed back. ` +
-        `API-created enrollments are not SIS-managed.`;
+        `${counts.ready} sections will sync to course ${plan.destinationCourseId}: ` +
+        `${counts.newSections} new, ${counts.resumedSections} resumed, and ` +
+        `${counts.existingSections} already here. Enrollments: ${counts.adds} add, ` +
+        `${counts.updates} update, ${counts.removals} remove, and ${counts.unchanged} already correct.` +
+        (counts.existingMoves
+          ? ` ${counts.existingMoves} changed sections will briefly return to holding course ` +
+            `${plan.holdingCourseId} while they are updated.`
+          : '') +
+        ' Notifications stay off.';
       cloneConfirmation.hidden = false;
-      setCourseScopeLocked(true);
-      cloneContinue.focus();
+      cloneContinue.disabled = courseScopeLocked || cloneRunning;
     }
 
     cloneAnalyze.addEventListener('click', analyzeCloneSections);
-    clonePrepare.addEventListener('click', prepareCloneExecution);
 
     function cloneResultRow(plan, entry, {
       action,
@@ -4580,6 +4634,7 @@
     async function executeCloneSync() {
       if (!cloneExecutionPlan || cloneRunning) return;
       cloneRunning = true;
+      setCourseScopeLocked(true);
       cloneConfirmation.hidden = true;
       cloneContinue.disabled = true;
       cloneCancel.disabled = true;
@@ -4590,7 +4645,10 @@
       let failed = 0;
       cloneProgress.max = Math.max(1, plan.entries.length);
       cloneProgress.value = 0;
-      showCloneStatus(`Synchronizing sections: 0 of ${plan.entries.length}.`);
+      showCloneStatus(`0 of ${plan.entries.length} sections finished.`, {
+        state: 'working',
+        heading: 'Sync in progress'
+      });
 
       try {
         for (const entry of plan.entries) {
@@ -4604,22 +4662,26 @@
             ? ''
             : ` Canvas quota remaining: ${apiState.rateRemaining}.`;
           showCloneStatus(
-            `Synchronizing sections: ${completed} of ${plan.entries.length}. ` +
+            `${completed} of ${plan.entries.length} sections finished. ` +
             `Succeeded: ${succeeded}. Blocked or failed: ${failed}.${rateText}`,
             { isError: failed > 0 }
           );
         }
         downloadCloneResults(plan, resultRows);
         showCloneStatus(
-          `Complete. ${succeeded} section(s) synchronized; ${failed} blocked or failed. ` +
-          `Results CSV downloaded. Any incomplete new clone remains in holding course ` +
-          `${plan.holdingCourseId} for a safe rerun.`,
-          { isError: failed > 0 }
+          `${succeeded} sections synchronized; ${failed} blocked or failed. The results CSV ` +
+          `has downloaded${failed ? `, and incomplete sections remain safely in holding course ${plan.holdingCourseId}` : ''}.`,
+          failed
+            ? { isError: true, heading: 'Sync finished with issues' }
+            : { state: 'success', heading: 'Sync complete' }
         );
       } catch (error) {
         console.error('Section clone sync failed.', error);
         if (resultRows.length) downloadCloneResults(plan, resultRows);
-        showCloneStatus(`Action stopped: ${error.message}`, { isError: true });
+        showCloneStatus(`Action stopped: ${error.message}`, {
+          isError: true,
+          heading: 'Sync stopped'
+        });
       } finally {
         cloneRunning = false;
         resetCloneAnalysis({ keepStatus: true });
@@ -4630,11 +4692,10 @@
 
     cloneCancel.addEventListener('click', () => {
       if (cloneRunning) return;
-      cloneExecutionPlan = null;
-      cloneConfirmation.hidden = true;
+      resetCloneAnalysis();
       setCourseScopeLocked(false);
       refreshCloneAvailability();
-      clonePrepare.focus();
+      cloneAnalyze.focus();
     });
     cloneContinue.addEventListener('click', executeCloneSync);
 
