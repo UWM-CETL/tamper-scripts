@@ -150,10 +150,12 @@ selected for the run are never removed.
 
 New sections are created in the holding course and students are added before other selected roles.
 Stale enrollments are removed only after every addition for that section succeeds. The section is
-cross-listed only after all prerequisite enrollment operations succeed. Existing destination clones
-are updated directly. Sections run sequentially while enrollment requests use the shared 15-request
-scheduler. A partial new clone remains in the holding course, where the next analysis recognizes and
-resumes it. The results CSV uses the compact filename
+cross-listed only after all prerequisite enrollment operations succeed. An existing destination clone
+that already matches receives no write. If analysis finds an enrollment, student section-limit, or
+name change, the existing clone is temporarily de-cross-listed to the holding course, updated there,
+and cross-listed back into the destination. Sections run sequentially while enrollment requests use
+the shared 15-request scheduler. A partial new or updated clone remains in the holding course, where
+the next analysis recognizes and resumes it. The results CSV uses the compact filename
 `sec-sync.course-<destination-course-id>.<timestamp>.csv`, preserves every input column, and adds
 `src.*`, `clone.*`, `enrollment.*`, `scope.*`, and `run.*` fields. API-created enrollments are not
 SIS-managed records.

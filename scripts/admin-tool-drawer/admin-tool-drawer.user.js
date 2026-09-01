@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.13.0
+// @version      0.13.1
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -3806,6 +3806,11 @@
         newSections: ready.filter(entry => entry.cloneState === 'new').length,
         resumedSections: ready.filter(entry => entry.cloneState === 'resumable').length,
         existingSections: ready.filter(entry => entry.cloneState === 'existing').length,
+        existingMoves: ready.filter(entry => (
+          entry.cloneState === 'existing' && (
+            entry.rename || entry.adds.length || entry.updates.length || entry.removals.length
+          )
+        )).length,
         renamedSections: ready.filter(entry => entry.rename).length,
         adds: ready.reduce((total, entry) => total + entry.adds.length, 0),
         updates: ready.reduce((total, entry) => total + entry.updates.length, 0),
@@ -3841,6 +3846,8 @@
         `section-limit setting(s) updated, ${counts.removals} removed, ` +
         `${counts.unchanged} unchanged, ${counts.renamedSections} section name update(s), and ` +
         `${counts.blocked} blocked CSV row(s). Notifications will not be sent.${removalWarning} ` +
+        `${counts.existingMoves} existing clone(s) with changes will be temporarily returned to ` +
+        `holding course ${plan.holdingCourseId}, updated there, and cross-listed back. ` +
         `API-created enrollments are not SIS-managed.`;
       cloneConfirmation.hidden = false;
       setCourseScopeLocked(true);
@@ -4015,10 +4022,40 @@
       }
 
       const startedState = entry.cloneState;
+      const requiresMutation = Boolean(
+        entry.rename || entry.adds.length || entry.updates.length || entry.removals.length
+      );
       let currentCourseId = startedState === 'existing'
         ? plan.destinationCourseId
         : plan.holdingCourseId;
+      let needsCrosslist = startedState !== 'existing';
       let operationErrors = 0;
+
+      if (startedState === 'existing' && requiresMutation) {
+        try {
+          const result = await canvasApi.request(
+            `/api/v1/sections/${encodeURIComponent(String(entry.cloneSection.id))}/crosslist`,
+            { method: 'DELETE' }
+          );
+          entry.cloneSection = result.data || entry.cloneSection;
+          currentCourseId = plan.holdingCourseId;
+          needsCrosslist = true;
+          if (String(entry.cloneSection.course_id || '') !== plan.holdingCourseId) {
+            throw new Error('Canvas de-cross-listed the section but did not return it to the selected holding course.');
+          }
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'uncrosslist_clone_section',
+            status: 'returned_to_holding'
+          }));
+        } catch (error) {
+          resultRows.push(cloneResultRow(plan, entry, {
+            action: 'uncrosslist_clone_section',
+            status: 'uncrosslist_error',
+            error: error.message
+          }));
+          return { succeeded: false, failed: true };
+        }
+      }
 
       if (startedState === 'new') {
         try {
@@ -4040,7 +4077,9 @@
           }));
           return { succeeded: false, failed: true };
         }
-      } else if (entry.rename) {
+      }
+
+      if (entry.rename) {
         try {
           const result = await canvasApi.request(
             `/api/v1/sections/${encodeURIComponent(String(entry.cloneSection.id))}`,
@@ -4104,7 +4143,7 @@
         }
       }
 
-      if (startedState !== 'existing') {
+      if (needsCrosslist) {
         if (operationErrors) {
           resultRows.push(cloneResultRow(plan, entry, {
             action: 'crosslist_clone_section',
