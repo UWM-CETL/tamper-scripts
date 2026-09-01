@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.15.1
+// @version      0.16.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1795,7 +1795,7 @@
           <div class="context-accordions" aria-label="Canvas tool contexts">
             <section class="accordion-item" data-context="admin">
               <button class="accordion-trigger" type="button" id="uwm-admin-context-trigger" aria-expanded="false" aria-controls="uwm-admin-context-panel">
-                <span>Admin</span>
+                <span>Account</span>
                 <span class="accordion-chevron" aria-hidden="true">›</span>
               </button>
               <div class="accordion-panel" id="uwm-admin-context-panel" role="region" aria-labelledby="uwm-admin-context-trigger" hidden>
@@ -1826,7 +1826,7 @@
                   </div>
                 </div>
 
-                <div class="subaccordions" aria-label="Admin tool categories">
+                <div class="subaccordions" aria-label="Account tool categories">
                   <section class="subaccordion-item" data-admin-category="courses">
                     <button class="subaccordion-trigger" type="button" id="uwm-admin-courses-trigger" aria-expanded="false" aria-controls="uwm-admin-courses-panel">
                       <span>Courses</span>
@@ -1946,7 +1946,35 @@
                       <span class="accordion-chevron" aria-hidden="true">›</span>
                     </button>
                     <div class="subaccordion-panel" id="uwm-admin-people-panel" role="region" aria-labelledby="uwm-admin-people-trigger" hidden>
-                      <p class="context-help">People tools will appear here.</p>
+                      <div class="action-accordions" aria-label="Account people actions">
+                        <section class="action-accordion-item" data-course-action="remove-duplicate-observers">
+                          <button class="action-accordion-trigger" type="button" id="uwm-observer-cleanup-trigger" aria-expanded="false" aria-controls="uwm-observer-cleanup-panel">
+                            <span>Remove duplicate Observer enrollments</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-observer-cleanup-panel" role="region" aria-labelledby="uwm-observer-cleanup-trigger" hidden>
+                            <p class="tool-description">Finds people who are active Students and active Observers in the same course. The enrollment report supplies both course and section IDs, so the enrollments do not need to share a section.</p>
+                            <button class="action-button" id="uwm-observer-cleanup-analyze" type="button" disabled>Review enrollments</button>
+
+                            <div class="analysis-summary" id="uwm-observer-cleanup-analysis" hidden>
+                              <p id="uwm-observer-cleanup-analysis-text"></p>
+                            </div>
+
+                            <div class="confirmation" id="uwm-observer-cleanup-confirmation" hidden>
+                              <p id="uwm-observer-cleanup-confirmation-text"></p>
+                              <div class="confirmation-actions">
+                                <button class="confirmation-button primary" id="uwm-observer-cleanup-continue" type="button">Remove Observer enrollments</button>
+                                <button class="confirmation-button" id="uwm-observer-cleanup-cancel" type="button">Cancel</button>
+                              </div>
+                            </div>
+
+                            <div class="run-status" id="uwm-observer-cleanup-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-observer-cleanup-progress"></progress>
+                              <p id="uwm-observer-cleanup-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
+                      </div>
                     </div>
                   </section>
 
@@ -2129,6 +2157,16 @@
     const enableNavigationStatus = shadowRoot.querySelector('#uwm-enable-navigation-status');
     const enableNavigationProgress = shadowRoot.querySelector('#uwm-enable-navigation-progress');
     const enableNavigationStatusText = shadowRoot.querySelector('#uwm-enable-navigation-status-text');
+    const observerCleanupAnalyze = shadowRoot.querySelector('#uwm-observer-cleanup-analyze');
+    const observerCleanupAnalysis = shadowRoot.querySelector('#uwm-observer-cleanup-analysis');
+    const observerCleanupAnalysisText = shadowRoot.querySelector('#uwm-observer-cleanup-analysis-text');
+    const observerCleanupConfirmation = shadowRoot.querySelector('#uwm-observer-cleanup-confirmation');
+    const observerCleanupConfirmationText = shadowRoot.querySelector('#uwm-observer-cleanup-confirmation-text');
+    const observerCleanupContinue = shadowRoot.querySelector('#uwm-observer-cleanup-continue');
+    const observerCleanupCancel = shadowRoot.querySelector('#uwm-observer-cleanup-cancel');
+    const observerCleanupStatus = shadowRoot.querySelector('#uwm-observer-cleanup-status');
+    const observerCleanupProgress = shadowRoot.querySelector('#uwm-observer-cleanup-progress');
+    const observerCleanupStatusText = shadowRoot.querySelector('#uwm-observer-cleanup-status-text');
     const cloneSourceSectionColumn = shadowRoot.querySelector('#uwm-clone-source-section-column');
     const cloneLimitStudents = shadowRoot.querySelector('#uwm-clone-limit-students');
     const cloneAnalyze = shadowRoot.querySelector('#uwm-clone-sections-analyze');
@@ -2153,6 +2191,8 @@
     let csvScope = null;
     let enableNavigationPlan = null;
     let enableNavigationRunning = false;
+    let observerCleanupPlan = null;
+    let observerCleanupRunning = false;
     let courseCsvScope = null;
     let cloneAnalysisPlan = null;
     let cloneExecutionPlan = null;
@@ -2328,6 +2368,7 @@
       termStatus.textContent = currentTermsExist
         ? `All Current Terms is selected (${grouped.current.length} term${grouped.current.length === 1 ? '' : 's'} today). Hold Ctrl or Command to add other terms.`
         : 'No current dated terms were found; a safer fallback was selected. Hold Ctrl or Command to select more than one.';
+      refreshObserverCleanupAvailability();
     }
 
     async function loadTermsForAccount(accountId) {
@@ -2378,6 +2419,7 @@
         termSelect.disabled = true;
         termStatus.classList.add('is-error');
         termStatus.textContent = `Terms could not be loaded: ${error.message}`;
+        refreshObserverCleanupAvailability();
       }
     }
 
@@ -2392,6 +2434,7 @@
         termSelect.disabled = true;
         termStatus.classList.remove('is-error');
         termStatus.textContent = 'Current terms are selected automatically. Hold Ctrl or Command to select more than one.';
+        refreshObserverCleanupAvailability();
         return;
       }
 
@@ -2818,7 +2861,11 @@
       });
     }
 
-    adminContextInput.addEventListener('input', scheduleTermsLoad);
+    adminContextInput.addEventListener('input', () => {
+      resetObserverCleanup();
+      scheduleTermsLoad();
+    });
+    publishedOnlyCheckbox.addEventListener('change', resetObserverCleanup);
     csvFileInput.addEventListener('change', () => loadCsvScope(csvFileInput.files?.[0]));
     courseCsvFileInput.addEventListener('change', () => loadCourseCsvScope(courseCsvFileInput.files?.[0]));
     for (const input of [courseContextInput, courseHoldingCourseInput]) {
@@ -2865,6 +2912,8 @@
       termStatus.textContent = scope.label
         ? `Selected: ${scope.label}. Hold Ctrl or Command to select more than one.`
         : 'Select at least one term scope.';
+      resetObserverCleanup();
+      refreshObserverCleanupAvailability();
     });
 
     openContext(canvasContext.activeContext);
@@ -2881,6 +2930,27 @@
         termsAccountId !== adminContextInput.value.trim() ||
         !availableTerms.length;
       refreshCsvActionAvailability();
+      refreshObserverCleanupAvailability();
+    }
+
+    function resetObserverCleanup() {
+      observerCleanupPlan = null;
+      observerCleanupAnalysis.hidden = true;
+      observerCleanupConfirmation.hidden = true;
+      observerCleanupStatus.hidden = true;
+      observerCleanupContinue.disabled = false;
+      observerCleanupCancel.disabled = false;
+      refreshObserverCleanupAvailability();
+    }
+
+    function refreshObserverCleanupAvailability() {
+      const accountId = adminContextInput.value.trim();
+      const termsReady = /^\d+$/.test(accountId) &&
+        termsAccountId === accountId &&
+        !termSelect.disabled;
+      const termScope = termsReady ? selectedTermScope() : { allTerms: false, terms: [] };
+      observerCleanupAnalyze.disabled = adminScopeLocked || observerCleanupRunning ||
+        !termsReady || (!termScope.allTerms && !termScope.terms.length);
     }
 
     function showNavigationStatus(message, { isError = false } = {}) {
@@ -3474,6 +3544,324 @@
       sectionCancel.disabled = true;
       runSectionReport(pendingSectionScope);
     });
+
+    function showObserverCleanupStatus(message, { isError = false } = {}) {
+      observerCleanupStatus.hidden = false;
+      observerCleanupStatus.classList.toggle('is-error', isError);
+      observerCleanupStatusText.textContent = message;
+    }
+
+    async function observerCleanupPublishedCourseIds(scope) {
+      if (!scope.publishedOnly) return null;
+      const termRequests = scope.allTerms ? [null] : scope.terms;
+      const courseLists = await Promise.all(termRequests.map(term => {
+        const params = new URLSearchParams({ per_page: '100' });
+        params.set('published', 'true');
+        if (term) params.set('enrollment_term_id', String(term.id));
+        return canvasApi.getAll(
+          `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${params.toString()}`
+        );
+      }));
+      return new Set(courseLists.flat().map(course => String(course.id)));
+    }
+
+    async function observerCleanupEnrollmentRows(scope) {
+      const termRequests = scope.allTerms ? [null] : scope.terms;
+      const rows = [];
+      for (let index = 0; index < termRequests.length; index++) {
+        const term = termRequests[index];
+        showObserverCleanupStatus(
+          `Requesting enrollment report ${index + 1} of ${termRequests.length}: ` +
+          `${term?.name || 'All Terms'}.`
+        );
+        const body = {
+          'parameters[enrollments]': '1',
+          'parameters[enrollment_states][]': ['active']
+        };
+        if (term) body['parameters[enrollment_term_id]'] = String(term.id);
+        const created = await canvasApi.request(
+          `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/reports/provisioning_csv`,
+          { method: 'POST', body }
+        );
+        const reportId = created.data?.id;
+        if (!reportId) throw new Error('Canvas did not return an enrollment report ID.');
+        const report = await waitForCanvasReport(scope.accountId, reportId, current => {
+          const progress = Number(current.progress);
+          showObserverCleanupStatus(
+            `Enrollment report ${index + 1} of ${termRequests.length}: ` +
+            `${current.status || 'queued'}${Number.isFinite(progress) ? ` (${progress}%).` : '.'}`
+          );
+        });
+        const parsed = parseCsvText(await canvasReportCsv(report, 'enrollments.csv'));
+        requireCsvHeaders(parsed, 'enrollments.csv', [
+          'canvas_enrollment_id',
+          'canvas_course_id',
+          'canvas_user_id',
+          'canvas_section_id',
+          'base_role_type',
+          'status'
+        ]);
+        rows.push(...parsed.rows);
+      }
+      return rows;
+    }
+
+    function observerCleanupScope() {
+      const accountId = adminContextInput.value.trim();
+      if (!/^\d+$/.test(accountId)) {
+        adminContextInput.setCustomValidity('Enter a numeric Canvas account ID.');
+        adminContextInput.reportValidity();
+        adminContextInput.focus();
+        return null;
+      }
+      if (termSelect.disabled || termsAccountId !== accountId) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Wait for the terms for this account to finish loading.';
+        return null;
+      }
+      const termScope = selectedTermScope();
+      if (!termScope.allTerms && !termScope.terms.length) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Select at least one term scope before reviewing enrollments.';
+        termSelect.focus();
+        return null;
+      }
+      return {
+        accountId,
+        publishedOnly: publishedOnlyCheckbox.checked,
+        allTerms: termScope.allTerms,
+        terms: termScope.terms,
+        termLabel: termScope.label
+      };
+    }
+
+    async function analyzeObserverCleanup() {
+      if (observerCleanupRunning || navigationReportRunning || sectionReportRunning ||
+        enableNavigationRunning || cloneRunning || emailInstructorsRunning) return;
+      const scope = observerCleanupScope();
+      if (!scope) return;
+
+      observerCleanupRunning = true;
+      observerCleanupPlan = null;
+      observerCleanupAnalysis.hidden = true;
+      observerCleanupConfirmation.hidden = true;
+      observerCleanupProgress.removeAttribute('value');
+      observerCleanupProgress.removeAttribute('max');
+      setDrawerOperationLock(true, observerCleanupAnalyze);
+      setAdminScopeLocked(true);
+      showObserverCleanupStatus('Preparing the selected Account scope…');
+
+      try {
+        const publishedCourseIds = await observerCleanupPublishedCourseIds(scope);
+        if (publishedCourseIds?.size === 0) {
+          observerCleanupAnalysisText.textContent =
+            'No published courses were found in the selected Account and term scope.';
+          observerCleanupAnalysis.hidden = false;
+          showObserverCleanupStatus('Review complete. Nothing will be changed.');
+          setDrawerOperationLock(false);
+          setAdminScopeLocked(false);
+          return;
+        }
+        showObserverCleanupStatus(scope.publishedOnly
+          ? `Loaded ${publishedCourseIds.size} published course(s). Asking Canvas for active enrollments…`
+          : 'Asking Canvas for active enrollments…');
+        const reportRows = await observerCleanupEnrollmentRows(scope);
+
+        const activeStudents = new Map();
+        for (const row of reportRows) {
+          const courseId = String(row.canvas_course_id || '').trim();
+          const userId = String(row.canvas_user_id || '').trim();
+          if ((publishedCourseIds && !publishedCourseIds.has(courseId)) || !userId ||
+            String(row.status || '').toLowerCase() !== 'active') continue;
+          if (row.base_role_type === 'StudentEnrollment') {
+            const key = `${courseId}\u0000${userId}`;
+            const enrollmentIds = activeStudents.get(key) || [];
+            const enrollmentId = String(row.canvas_enrollment_id || '').trim();
+            if (enrollmentId && !enrollmentIds.includes(enrollmentId)) {
+              enrollmentIds.push(enrollmentId);
+            }
+            activeStudents.set(key, enrollmentIds);
+          }
+        }
+
+        const entriesByEnrollmentId = new Map();
+        for (const row of reportRows) {
+          const courseId = String(row.canvas_course_id || '').trim();
+          const userId = String(row.canvas_user_id || '').trim();
+          const enrollmentId = String(row.canvas_enrollment_id || '').trim();
+          const key = `${courseId}\u0000${userId}`;
+          if ((publishedCourseIds && !publishedCourseIds.has(courseId)) ||
+            !activeStudents.has(key) ||
+            row.base_role_type !== 'ObserverEnrollment' ||
+            String(row.status || '').toLowerCase() !== 'active' ||
+            !enrollmentId) continue;
+          if (!entriesByEnrollmentId.has(enrollmentId)) {
+            entriesByEnrollmentId.set(enrollmentId, {
+              reportRow: row,
+              studentEnrollmentIds: activeStudents.get(key),
+              status: 'will_delete',
+              error: ''
+            });
+          }
+        }
+
+        const entries = Array.from(entriesByEnrollmentId.values());
+        entries.sort((left, right) => (
+          String(left.reportRow.canvas_course_id).localeCompare(
+            String(right.reportRow.canvas_course_id), undefined, { numeric: true }
+          ) || String(left.reportRow.canvas_user_id).localeCompare(
+            String(right.reportRow.canvas_user_id), undefined, { numeric: true }
+          )
+        ));
+        observerCleanupPlan = { scope, entries };
+        const courseCount = new Set(entries.map(entry => (
+          String(entry.reportRow.canvas_course_id)
+        ))).size;
+        observerCleanupAnalysisText.textContent =
+          `${entries.length} active Observer enrollment(s) can be removed across ` +
+          `${courseCount} course(s).`;
+        observerCleanupAnalysis.hidden = false;
+
+        if (!entries.length) {
+          showObserverCleanupStatus(
+            'Review complete. No duplicate Observer enrollments were found.'
+          );
+          setDrawerOperationLock(false);
+          setAdminScopeLocked(false);
+          return;
+        }
+
+        observerCleanupConfirmationText.textContent =
+          `Remove ${entries.length} active Observer enrollment(s)? Every listed person also has an ` +
+          `active Student enrollment in the same course. The two enrollments do not need to share ` +
+          `a section.`;
+        observerCleanupConfirmation.hidden = false;
+        showObserverCleanupStatus('Read-only review complete. No enrollments have been changed.');
+        observerCleanupContinue.focus();
+      } catch (error) {
+        console.error('Duplicate Observer enrollment review failed.', error);
+        observerCleanupPlan = null;
+        showObserverCleanupStatus(`Review stopped: ${error.message}`, { isError: true });
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      } finally {
+        observerCleanupRunning = false;
+        refreshObserverCleanupAvailability();
+      }
+    }
+
+    function observerCleanupResultRows(plan) {
+      const completedAt = new Date().toISOString();
+      return plan.entries.map(entry => {
+        const row = entry.reportRow;
+        return {
+          'scope.account_id': plan.scope.accountId,
+          'scope.published': plan.scope.publishedOnly,
+          'scope.enrollment_term_ids': plan.scope.allTerms
+            ? 'all'
+            : plan.scope.terms.map(term => term.id).join('|'),
+          'scope.enrollment_term_names': plan.scope.termLabel,
+          'course.id': row.canvas_course_id ?? '',
+          'course.sis_course_id': row.course_id ?? '',
+          'user.id': row.canvas_user_id ?? '',
+          'user.sis_user_id': row.user_id ?? '',
+          'student.enrollment_ids': entry.studentEnrollmentIds.join('|'),
+          'observer.enrollment_id': row.canvas_enrollment_id ?? '',
+          'observer.base_role_type': row.base_role_type ?? '',
+          'observer.role_id': row.role_id ?? '',
+          'observer.course_section_id': row.canvas_section_id ?? '',
+          'observer.sis_section_id': row.section_id ?? '',
+          'observer.created_by_sis': row.created_by_sis ?? '',
+          'run.action': 'delete_duplicate_course_observer',
+          'run.completed_at': completedAt,
+          'run.status': entry.status,
+          'run.error': entry.error
+        };
+      });
+    }
+
+    async function executeObserverCleanup() {
+      if (!observerCleanupPlan || observerCleanupRunning) return;
+      observerCleanupRunning = true;
+      setDrawerOperationLock(true, observerCleanupContinue);
+      observerCleanupConfirmation.hidden = true;
+      observerCleanupContinue.disabled = true;
+      observerCleanupCancel.disabled = true;
+      const plan = observerCleanupPlan;
+      let completed = 0;
+      let deleted = 0;
+      let failed = 0;
+      observerCleanupProgress.max = Math.max(1, plan.entries.length);
+      observerCleanupProgress.value = 0;
+      showObserverCleanupStatus(`Removing Observer enrollments: 0 of ${plan.entries.length}.`);
+
+      try {
+        await Promise.all(plan.entries.map(async entry => {
+          try {
+            const row = entry.reportRow;
+            await canvasApi.request(
+              `/api/v1/courses/${encodeURIComponent(String(row.canvas_course_id))}` +
+              `/enrollments/${encodeURIComponent(String(row.canvas_enrollment_id))}?task=delete`,
+              { method: 'DELETE' }
+            );
+            entry.status = 'deleted';
+            entry.error = '';
+            deleted++;
+          } catch (error) {
+            entry.status = 'error';
+            entry.error = error.message;
+            failed++;
+          } finally {
+            completed++;
+            observerCleanupProgress.value = completed;
+            showObserverCleanupStatus(
+              `Removing Observer enrollments: ${completed} of ${plan.entries.length}. ` +
+              `Removed: ${deleted}. Errors: ${failed}.`,
+              { isError: failed > 0 }
+            );
+          }
+        }));
+
+        const rows = observerCleanupResultRows(plan);
+        const columns = rows.length
+          ? Object.keys(rows[0]).map(key => ({ key, label: key }))
+          : [];
+        downloadCsv({
+          rows,
+          columns,
+          filename: `obs-cleanup.acct-${plan.scope.accountId}.` +
+            `${plan.scope.publishedOnly ? 'pub' : 'unpub'}.${timestampForFilename()}.csv`
+        });
+        observerCleanupAnalysisText.textContent =
+          `${deleted} Observer enrollment(s) removed; ${failed} error(s).`;
+        observerCleanupAnalysis.hidden = false;
+        showObserverCleanupStatus(
+          `Complete. ${deleted} Observer enrollment(s) removed; ${failed} error(s). Results CSV downloaded.`,
+          { isError: failed > 0 }
+        );
+      } catch (error) {
+        console.error('Duplicate Observer enrollment cleanup failed.', error);
+        showObserverCleanupStatus(`Cleanup stopped: ${error.message}`, { isError: true });
+      } finally {
+        observerCleanupRunning = false;
+        observerCleanupPlan = null;
+        observerCleanupContinue.disabled = false;
+        observerCleanupCancel.disabled = false;
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      }
+    }
+
+    observerCleanupAnalyze.addEventListener('click', analyzeObserverCleanup);
+    observerCleanupCancel.addEventListener('click', () => {
+      if (observerCleanupRunning) return;
+      observerCleanupPlan = null;
+      observerCleanupConfirmation.hidden = true;
+      setDrawerOperationLock(false);
+      setAdminScopeLocked(false);
+      observerCleanupAnalyze.focus();
+    });
+    observerCleanupContinue.addEventListener('click', executeObserverCleanup);
 
     function courseApiIdentifier(value, idType) {
       const identifier = String(value ?? '').trim();

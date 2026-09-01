@@ -7,7 +7,7 @@ opens an accessible drawer from the left side of the page.
 
 The drawer contains three accordion contexts:
 
-* **Admin** for account and subaccount tools.
+* **Account** for account and subaccount tools.
 * **Course** for course-level tools.
 * **Page** for tools that act on a specific Canvas item, such as an assignment, quiz, discussion,
   module, file, user, section, or content page.
@@ -16,8 +16,8 @@ The script opens the context that is apparent from the current Canvas URL and fi
 Canvas ID it can determine. Course is the default when the context is ambiguous. Every context ID
 field remains editable so an admin can target a different account, course, or item.
 
-The Admin context currently contains **Courses**, **People**, and **Sub-Accounts** sub-accordions.
-Its shared **Published courses only** scope is enabled by default and is applied to Admin reports that
+The Account context currently contains **Courses**, **People**, and **Sub-Accounts** sub-accordions.
+Its shared **Published courses only** scope is enabled by default and is applied to Account reports that
 operate on courses unless an action explicitly states otherwise. The section matcher intentionally
 searches every non-deleted course in the selected terms. A grouped, multiple-selection **Terms**
 scope provides flexible meta-options for
@@ -29,7 +29,7 @@ therefore means all terms used in that selected scope, not every consortium term
 ordered by `start_at` within each group.
 
 Course tools are nested action accordions. This keeps each action's mappings, analysis, confirmation,
-progress, and results separate. Admin and Course contexts have independent CSV scopes so a field
+progress, and results separate. Account and Course contexts have independent CSV scopes so a field
 mapping is always owned by the action that consumes it.
 
 Only one drawer operation can run at a time. While a report, analysis, or write is active, its own
@@ -50,7 +50,7 @@ are removed. The action only opens a draft; it never sends a message.
 
 ### Course navigation links report
 
-Under **Admin → Courses**, **Get all navigation links** creates a CSV containing the available Canvas
+Under **Account → Courses**, **Get all navigation links** creates a CSV containing the available Canvas
 navigation tabs for every course in the selected account scope. Each row includes the course Canvas
 ID, course SIS ID, term Canvas ID, term SIS ID, course metadata, tab metadata, and both relative and
 absolute navigation URLs. Canvas filters the course-list requests by each selected enrollment term
@@ -71,7 +71,7 @@ term through `term.id`, `term.sis_term_id`, and `term.name`.
 
 ### Sections and class numbers report
 
-Under **Admin → Courses**, **Get sections and class numbers** matches a selected column in the
+Under **Account → Courses**, **Get sections and class numbers** matches a selected column in the
 uploaded CSV against sections in the selected account and term scope. The global **Published courses
 only** setting does not apply: the matcher searches both published and unpublished non-deleted
 courses. The script asks Canvas to generate a server-side Provisioning report containing only
@@ -103,6 +103,26 @@ service. Uploading establishes only the reusable rows and headers. Every field s
 mapping belongs to the action that consumes it and is displayed inside that action's accordion.
 Column selectors never choose a field automatically; the user must make every mapping explicitly.
 Duplicate or blank headers are rejected so later field mappings remain unambiguous.
+
+### Remove duplicate Observer enrollments
+
+Under **Account → People**, **Remove duplicate Observer enrollments** finds people who have both an
+active Student enrollment and an active Observer enrollment in the same course. It
+honors the selected terms and **Published courses only** setting. The read-only review begins with a
+term-scoped Canvas Provisioning enrollment report. When **Published courses only** is selected, the
+report rows are limited to the published course IDs returned for the selected Account scope.
+
+The Provisioning enrollment row supplies the Canvas course, section, user, and enrollment IDs. The
+tool pairs active `StudentEnrollment` and `ObserverEnrollment` rows by Canvas course ID plus Canvas
+user ID; the two records do not need to share a section. Invited and inactive enrollments are never
+selected. Each Observer enrollment ID appears only once in the change plan.
+
+When the review finds verified duplicates, one confirmation states the exact number that will be
+removed. Confirming deletes only those Observer enrollment records; Student enrollments are never
+changed. The results download uses
+`obs-cleanup.acct-<account-id>.<pub|unpub>.<timestamp>.csv`, with `course.*`, `user.*`,
+`student.*`, `observer.*`, `scope.*`, and `run.*` fields. Its canonical action value is
+`delete_duplicate_course_observer`.
 
 ### Show or hide course navigation
 
@@ -247,10 +267,10 @@ future reports so source fields remain recognizable and reusable without another
 
 1. Sign in to a Canvas site hosted on `instructure.com` with an account-admin role.
 2. Select the tools icon in the upper-right corner.
-3. Confirm or enter the Canvas ID in the relevant Admin, Course, or Page accordion.
-4. For the navigation report, open **Admin → Courses → Get all navigation links**, select the term
+3. Confirm or enter the Canvas ID in the relevant Account, Course, or Page accordion.
+4. For the navigation report, open **Account → Courses → Get all navigation links**, select the term
    scope and whether to limit the scope to published courses, and prepare the report.
-5. For an Admin CSV action, upload the CSV in the Admin scope and provide the mappings inside that
+5. For an Account CSV action, upload the CSV in the Account scope and provide the mappings inside that
    action's accordion.
 6. For section cloning, open the destination course, upload the source-section CSV in the Course
    context, then map the source section column and enter the holding course ID.
