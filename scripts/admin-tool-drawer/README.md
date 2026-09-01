@@ -150,26 +150,28 @@ changed. The results download uses
 
 Under **Account → People**, **Remove admins** uses the shared Account CSV input and an
 action-specific **Email address column**. No column is selected automatically. The action scans the
-selected Account and every descendant subaccount through the recursive Subaccounts API, then loads
-each Account's active admin assignments. Terms and **Published courses only** do not apply because
-admin roles belong to Accounts rather than courses.
+selected Account and its descendant subaccounts with one Canvas Provisioning `admins.csv` report.
+It resolves only the uploaded email addresses through Account user search and joins those results to
+the report locally by Canvas user ID. The size of the Account hierarchy therefore does not create
+one API request per subaccount. Terms and **Published courses only** do not apply because admin roles
+belong to Accounts rather than courses.
 
-CSV addresses are trimmed and compared case-insensitively against the Canvas user's primary `email`,
-`login_id`, and `integration_id`. The integration ID is included because some UWM users' email
-addresses are stored there while their Canvas login IDs contain institutional IDs. Invalid and
-duplicate input rows are retained for the result but never produce a removal. Each explicit
+CSV addresses are trimmed and compared case-insensitively against exact Canvas `email`, `login_id`,
+and `integration_id` values returned by user search. Invalid and duplicate input rows are retained
+for the result but never produce a removal. Each explicit
 Account/user/role combination is processed once, and every active role matched to an email is
 included—not only a particular admin-role label.
 
 **Review admin assignments** is read-only. It reports the number of assignments, users, and Accounts
 that match, along with unmatched, invalid, and duplicate CSV rows. If any Account in the hierarchy
-cannot be read, the review is considered incomplete and no removal can be confirmed. Otherwise, the
-tool presents one final confirmation for all matched assignments. Canvas's Admins API supplies the
-assignment's `role_id`, which is required by the removal endpoint.
+cannot be represented by a complete report row, the review stops and no removal can be confirmed.
+Otherwise, the tool presents one final confirmation for all matched assignments. The Admins file
+supplies the assignment's `role_id`, which is required by the removal endpoint.
 
 Confirmed removals use the shared 15-request scheduler. If the uploaded CSV includes the person
 running the tool, that person's assignments are clearly called out in the confirmation and removed
-last, deepest subaccounts first, so earlier permissions are not lost midway through the run. The
+last, with the selected Account removed after its subaccounts, so earlier permissions are not lost
+midway through the run. The
 results CSV preserves the uploaded columns and adds `match.*`, `account.*`, `user.*`, `admin.*`, and
 `run.*` fields. The canonical action is `remove_account_admin`; the compact filename is
 `admin-remove.acct-<account-id>.<timestamp>.csv`.
