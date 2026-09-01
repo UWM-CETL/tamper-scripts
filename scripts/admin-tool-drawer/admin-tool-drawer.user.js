@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.14.1
+// @version      0.14.2
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1579,6 +1579,15 @@
           margin-bottom: 8px;
         }
 
+        .clone-review .confirmation {
+          background: transparent;
+          border: 0;
+          border-top: 1px solid rgb(255 247 237 / 14%);
+          border-radius: 0;
+          margin-top: 12px;
+          padding: 12px 0 0;
+        }
+
         .analysis-summary p {
           color: var(--uwm-muted);
           font-size: 0.78rem;
@@ -2023,7 +2032,6 @@
                         </fieldset>
 
                         <div class="confirmation" id="uwm-clone-sections-confirmation" hidden>
-                          <h4 class="workflow-heading">Ready to sync</h4>
                           <p id="uwm-clone-sections-confirmation-text"></p>
                           <div class="confirmation-actions">
                             <button class="confirmation-button primary" id="uwm-clone-sections-continue" type="button">Run sync</button>
@@ -3811,14 +3819,21 @@
         checkbox.value = role.key;
         checkbox.checked = role.type === 'StudentEnrollment';
         const text = document.createElement('span');
-        const roleDetails = role.label === role.type
-          ? role.label
-          : `${role.label} (${role.type})`;
+        const baseRoleLabels = {
+          StudentEnrollment: 'Students',
+          TeacherEnrollment: 'Teachers',
+          TaEnrollment: 'Teaching assistants',
+          ObserverEnrollment: 'Observers',
+          DesignerEnrollment: 'Designers'
+        };
+        const baseRoleLabel = baseRoleLabels[role.type] || role.type || 'Enrollments';
+        const roleDetails = role.label && role.label !== role.type
+          ? `${role.label} (${baseRoleLabel})`
+          : baseRoleLabel;
         text.textContent = `${roleDetails} `;
         const count = document.createElement('span');
         count.className = 'role-count';
-        count.textContent = `${role.sourceCount} source (${role.active} active, ` +
-          `${role.invited} invited); ${role.cloneCount} currently in managed clones`;
+        count.textContent = `${role.sourceCount} source · ${role.cloneCount} currently copied`;
         text.appendChild(count);
         label.append(checkbox, text);
         cloneRoleOptions.appendChild(label);
@@ -3875,7 +3890,8 @@
         (total, entry) => total + (entry.sourceEnrollments?.length || 0),
         0
       );
-      return `${uniqueEntries.length} sections checked: ${count('new')} new, ` +
+      const sectionLabel = uniqueEntries.length === 1 ? 'section' : 'sections';
+      return `${uniqueEntries.length} ${sectionLabel} checked: ${count('new')} new, ` +
         `${count('existing')} already here, ${count('resumable')} waiting in the holding course, ` +
         `and ${errors} needing attention. ${enrollments} active or invited enrollments found` +
         `${duplicates ? `; ${duplicates} repeated CSV rows ignored` : ''}.`;
@@ -4222,8 +4238,9 @@
         return;
       }
       cloneExecutionPlan = plan;
+      const sectionLabel = counts.ready === 1 ? 'section' : 'sections';
       cloneConfirmationText.textContent =
-        `${counts.ready} sections will sync to course ${plan.destinationCourseId}: ` +
+        `${counts.ready} ${sectionLabel} will sync to course ${plan.destinationCourseId}: ` +
         `${counts.newSections} new, ${counts.resumedSections} resumed, and ` +
         `${counts.existingSections} already here. Enrollments: ${counts.adds} add, ` +
         `${counts.updates} update, ${counts.removals} remove, and ${counts.unchanged} already correct.` +
