@@ -32,6 +32,12 @@ Course tools are nested action accordions. This keeps each action's mappings, an
 progress, and results separate. Admin and Course contexts have independent CSV scopes so a field
 mapping is always owned by the action that consumes it.
 
+Only one drawer operation can run at a time. While a report, analysis, or write is active, its own
+panel and progress remain visible while every unrelated context, scope, and action is temporarily
+inert. The drawer restores those controls automatically when the operation finishes or stops. A
+completed read-only review keeps the rest of the drawer locked only when that same panel is waiting
+for its final Run or Cancel choice.
+
 ### Course navigation links report
 
 Under **Admin → Courses**, **Get all navigation links** creates a CSV containing the available Canvas

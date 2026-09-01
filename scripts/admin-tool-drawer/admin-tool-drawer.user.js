@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.14.2
+// @version      0.14.3
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1103,22 +1103,6 @@
           background: rgb(255 255 255 / 10%);
         }
 
-        .warning {
-          background: rgb(169 42 53 / 20%);
-          border: 1px solid rgb(244 185 66 / 55%);
-          border-radius: 10px;
-          margin: 24px;
-          padding: 16px;
-        }
-
-        .warning strong {
-          color: var(--uwm-warning);
-          display: block;
-          font-size: 0.95rem;
-          margin-bottom: 5px;
-        }
-
-        .warning p,
         .context-help {
           color: var(--uwm-muted);
           line-height: 1.5;
@@ -1128,7 +1112,12 @@
         .context-accordions {
           display: grid;
           gap: 10px;
-          margin: 0 24px 24px;
+          margin: 24px;
+        }
+
+        .operation-locked {
+          opacity: 0.45;
+          transition: opacity 120ms ease;
         }
 
         .accordion-item {
@@ -1789,11 +1778,6 @@
             <button class="close-button" type="button" aria-label="Close Canvas admin tools">×</button>
           </div>
 
-          <div class="warning">
-            <strong>Changes here can affect live Canvas data.</strong>
-            <p>Read each tool carefully and confirm the target before taking an action.</p>
-          </div>
-
           <div class="context-accordions" aria-label="Canvas tool contexts">
             <section class="accordion-item" data-context="admin">
               <button class="accordion-trigger" type="button" id="uwm-admin-context-trigger" aria-expanded="false" aria-controls="uwm-admin-context-panel">
@@ -2074,6 +2058,7 @@
     const backdrop = shadowRoot.querySelector('.backdrop');
     const drawer = shadowRoot.querySelector('.drawer');
     const closeButton = shadowRoot.querySelector('.close-button');
+    const contextAccordions = shadowRoot.querySelector('.context-accordions');
     const accordionItems = Array.from(shadowRoot.querySelectorAll('.accordion-item'));
     const contextInputs = Array.from(shadowRoot.querySelectorAll('.context-id'));
     const subaccordionItems = Array.from(shadowRoot.querySelectorAll('.subaccordion-item'));
@@ -2152,6 +2137,40 @@
     let termsAccountId = '';
     let termsLoadSequence = 0;
     let termsLoadTimer = null;
+    let operationLockedElements = [];
+
+    function setDrawerOperationLock(isLocked, activeControl = null) {
+      for (const element of operationLockedElements) {
+        element.inert = false;
+        element.classList.remove('operation-locked');
+      }
+      operationLockedElements = [];
+
+      if (!isLocked || !activeControl) {
+        drawer.removeAttribute('aria-busy');
+        contextAccordions.removeAttribute('aria-busy');
+        return;
+      }
+
+      drawer.setAttribute('aria-busy', 'true');
+      contextAccordions.setAttribute('aria-busy', 'true');
+      let activeBranch = activeControl.closest('.action-accordion-item') ||
+        activeControl.closest('.subaccordion-item') ||
+        activeControl.closest('.accordion-item');
+      while (activeBranch && activeBranch !== contextAccordions) {
+        const parent = activeBranch.parentElement;
+        if (!parent) break;
+        for (const sibling of parent.children) {
+          if (sibling === activeBranch || operationLockedElements.some(locked => (
+            locked.contains(sibling)
+          ))) continue;
+          sibling.inert = true;
+          sibling.classList.add('operation-locked');
+          operationLockedElements.push(sibling);
+        }
+        activeBranch = parent;
+      }
+    }
 
     function termCacheKey(accountId) {
       return `${CONFIG.termsCacheKeyPrefix}${accountId}`;
@@ -2595,6 +2614,7 @@
 
     for (const item of accordionItems) {
       item.querySelector('.accordion-trigger').addEventListener('click', () => {
+        if (drawer.hasAttribute('aria-busy')) return;
         openContext(item.dataset.context);
       });
     }
@@ -2613,6 +2633,7 @@
 
     for (const item of subaccordionItems) {
       item.querySelector('.subaccordion-trigger').addEventListener('click', () => {
+        if (drawer.hasAttribute('aria-busy')) return;
         openAdminCategory(item.dataset.adminCategory);
       });
     }
@@ -2631,6 +2652,7 @@
 
     for (const item of courseActionItems) {
       item.querySelector('.action-accordion-trigger').addEventListener('click', () => {
+        if (drawer.hasAttribute('aria-busy')) return;
         const isOpen = item.classList.contains('is-active');
         openCourseAction(isOpen ? '' : item.dataset.courseAction);
       });
@@ -2772,6 +2794,7 @@
 
     async function runNavigationLinksReport(scope) {
       navigationReportRunning = true;
+      setDrawerOperationLock(true, navigationReportTrigger);
       navigationConfirmation.hidden = true;
       navigationStatus.classList.remove('is-error');
       navigationStatus.hidden = false;
@@ -2898,6 +2921,7 @@
       } finally {
         navigationReportRunning = false;
         pendingNavigationScope = null;
+        setDrawerOperationLock(false);
         navigationReportTrigger.disabled = false;
         navigationContinue.disabled = false;
         navigationCancel.disabled = false;
@@ -3092,6 +3116,7 @@
 
     async function runSectionReport(scope) {
       sectionReportRunning = true;
+      setDrawerOperationLock(true, sectionReportTrigger);
       sectionConfirmation.hidden = true;
       sectionStatus.classList.remove('is-error');
       sectionStatus.hidden = false;
@@ -3221,6 +3246,7 @@
       } finally {
         sectionReportRunning = false;
         pendingSectionScope = null;
+        setDrawerOperationLock(false);
         sectionContinue.disabled = false;
         sectionCancel.disabled = false;
         setAdminScopeLocked(false);
@@ -3364,6 +3390,7 @@
       }
 
       enableNavigationRunning = true;
+      setDrawerOperationLock(true, enableNavigationAnalyze);
       enableNavigationPlan = null;
       enableNavigationAnalysis.hidden = true;
       enableNavigationConfirmation.hidden = true;
@@ -3509,6 +3536,7 @@
         navigationReportTrigger.disabled = false;
       } finally {
         enableNavigationRunning = false;
+        if (enableNavigationConfirmation.hidden) setDrawerOperationLock(false);
         if (enableNavigationConfirmation.hidden) refreshCsvActionAvailability();
       }
     }
@@ -3561,6 +3589,7 @@
       if (!enableNavigationPlan || enableNavigationRunning) return;
 
       enableNavigationRunning = true;
+      setDrawerOperationLock(true, enableNavigationContinue);
       enableNavigationConfirmation.hidden = true;
       enableNavigationContinue.disabled = true;
       enableNavigationCancel.disabled = true;
@@ -3624,6 +3653,7 @@
         showEnableNavigationStatus(`Action stopped: ${error.message}`, { isError: true });
       } finally {
         enableNavigationRunning = false;
+        setDrawerOperationLock(false);
         enableNavigationContinue.disabled = false;
         enableNavigationCancel.disabled = false;
         navigationReportTrigger.disabled = false;
@@ -3638,6 +3668,7 @@
       if (enableNavigationRunning) return;
       enableNavigationPlan = null;
       enableNavigationConfirmation.hidden = true;
+      setDrawerOperationLock(false);
       setAdminScopeLocked(false);
       navigationReportTrigger.disabled = false;
       refreshCsvActionAvailability();
@@ -3916,6 +3947,7 @@
       }
 
       cloneRunning = true;
+      setDrawerOperationLock(true, cloneAnalyze);
       resetCloneAnalysis({ keepStatus: true });
       cloneProgress.removeAttribute('value');
       cloneProgress.removeAttribute('max');
@@ -4134,6 +4166,7 @@
         });
       } finally {
         cloneRunning = false;
+        if (!cloneExecutionPlan) setDrawerOperationLock(false);
         setCourseScopeLocked(false);
         refreshCloneAvailability();
         if (cloneExecutionPlan) cloneContinue.focus();
@@ -4651,6 +4684,7 @@
     async function executeCloneSync() {
       if (!cloneExecutionPlan || cloneRunning) return;
       cloneRunning = true;
+      setDrawerOperationLock(true, cloneContinue);
       setCourseScopeLocked(true);
       cloneConfirmation.hidden = true;
       cloneContinue.disabled = true;
@@ -4701,6 +4735,7 @@
         });
       } finally {
         cloneRunning = false;
+        setDrawerOperationLock(false);
         resetCloneAnalysis({ keepStatus: true });
         setCourseScopeLocked(false);
         refreshCloneAvailability();
@@ -4710,6 +4745,7 @@
     cloneCancel.addEventListener('click', () => {
       if (cloneRunning) return;
       resetCloneAnalysis();
+      setDrawerOperationLock(false);
       setCourseScopeLocked(false);
       refreshCloneAvailability();
       cloneAnalyze.focus();
