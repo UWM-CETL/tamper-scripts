@@ -133,7 +133,9 @@ resolves every unique
 source section, loads all active and invited section enrollments with common pagination, validates the
 destination and holding courses, and discovers the exact Canvas enrollment roles present in the
 source or an existing managed clone. Student-based roles are selected by default; custom roles retain
-their Canvas `role_id`.
+their Canvas `role_id`. Repeated source section IDs are processed once. Their additional input rows
+are retained in the results CSV with `run.status=deduplicated`; they are not counted as blocked or
+failed because reports from an earlier sync can legitimately contain one row per enrollment or action.
 
 A managed clone has the canonical visible name
 `<source section name> - Copy [src <source Canvas section ID>]`. The script positively identifies it

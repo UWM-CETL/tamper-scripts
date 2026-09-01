@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.13.3
+// @version      0.13.4
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -3600,6 +3600,7 @@
       const uniqueEntries = entries.filter(entry => entry.status !== 'duplicate_source');
       const count = state => uniqueEntries.filter(entry => entry.cloneState === state).length;
       const errors = uniqueEntries.filter(entry => entry.status && entry.status !== 'ready').length;
+      const duplicates = entries.length - uniqueEntries.length;
       const enrollments = uniqueEntries.reduce(
         (total, entry) => total + (entry.sourceEnrollments?.length || 0),
         0
@@ -3607,7 +3608,8 @@
       return `${uniqueEntries.length} unique source section(s): ${count('new')} new, ` +
         `${count('existing')} already in the destination, ${count('resumable')} resumable in the ` +
         `holding course, ${count('ambiguous')} ambiguous. ${enrollments} active or invited ` +
-        `source enrollment(s) found; ${errors} blocked section(s).`;
+        `source enrollment(s) found; ${duplicates} repeated CSV row(s) deduplicated; ` +
+        `${errors} blocked section(s).`;
     }
 
     async function analyzeCloneSections() {
@@ -3830,7 +3832,10 @@
         updates: ready.reduce((total, entry) => total + entry.updates.length, 0),
         removals: ready.reduce((total, entry) => total + entry.removals.length, 0),
         unchanged: ready.reduce((total, entry) => total + entry.unchanged.length, 0),
-        blocked: plan.entries.filter(entry => entry.status !== 'ready').length
+        deduplicated: plan.entries.filter(entry => entry.status === 'duplicate_source').length,
+        blocked: plan.entries.filter(entry => (
+          entry.status !== 'ready' && entry.status !== 'duplicate_source'
+        )).length
       };
     }
 
@@ -3859,7 +3864,8 @@
         `already in the destination; ${counts.adds} enrollment(s) added, ${counts.updates} student ` +
         `section-limit setting(s) updated, ${counts.removals} removed, ` +
         `${counts.unchanged} unchanged, ${counts.renamedSections} section name update(s), and ` +
-        `${counts.blocked} blocked CSV row(s). Notifications will not be sent.${removalWarning} ` +
+        `${counts.deduplicated} repeated CSV row(s) deduplicated, and ${counts.blocked} blocked ` +
+        `CSV row(s). Notifications will not be sent.${removalWarning} ` +
         `${counts.existingMoves} existing clone(s) with changes will be temporarily returned to ` +
         `holding course ${plan.holdingCourseId}, updated there, and cross-listed back. ` +
         `API-created enrollments are not SIS-managed.`;
@@ -4026,6 +4032,14 @@
     }
 
     async function executeCloneEntry(plan, entry, resultRows) {
+      if (entry.status === 'duplicate_source') {
+        resultRows.push(cloneResultRow(plan, entry, {
+          action: 'sync_section_clone',
+          status: 'deduplicated'
+        }));
+        return { succeeded: false, failed: false };
+      }
+
       if (entry.status !== 'ready') {
         resultRows.push(cloneResultRow(plan, entry, {
           action: 'sync_section_clone',
