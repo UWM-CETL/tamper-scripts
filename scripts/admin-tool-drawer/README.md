@@ -41,11 +41,12 @@ for its final Run or Cancel choice.
 ### Email course instructors
 
 The Course context includes a one-click **Email instructors** action. It looks up active and invited
-users whose enrollment is based on Canvas's Teacher role, including custom instructor roles, and
-opens the computer's default email application with those addresses in the recipient field. The
-subject identifies the Canvas course by course code and name. When an address is not present on the
-course user record, the action checks that instructor's Canvas profile before omitting them. Duplicate
-addresses are removed. The action only opens a draft; it never sends a message.
+enrollments whose Canvas role is exactly **Teacher**, **TA**, or **TA Grader** and opens the
+computer's default email application with those users in the recipient field. Other custom roles are
+excluded even when they share a Teacher or TA base enrollment type. The subject identifies the Canvas
+course by course code and name. When an address is not present on the enrollment's user record, the
+action checks that instructor's Canvas profile before omitting them. Duplicate users and addresses
+are removed. The action only opens a draft; it never sends a message.
 
 ### Course navigation links report
 

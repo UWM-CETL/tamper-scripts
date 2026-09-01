@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.15.0
+// @version      0.15.1
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -2512,6 +2512,13 @@
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
     }
 
+    function isInstructorEmailRole(enrollment) {
+      const role = String(enrollment.role || enrollment.type || '')
+        .trim()
+        .toLowerCase();
+      return ['teacher', 'teacherenrollment', 'ta', 'taenrollment', 'ta grader'].includes(role);
+    }
+
     async function emailCourseInstructors() {
       if (emailInstructorsRunning || navigationReportRunning || sectionReportRunning ||
         enableNavigationRunning || cloneRunning || cloneExecutionPlan) return;
@@ -2531,15 +2538,34 @@
 
       try {
         const params = new URLSearchParams({ per_page: '100' });
-        params.append('enrollment_type[]', 'teacher');
-        params.append('enrollment_state[]', 'active');
-        params.append('enrollment_state[]', 'invited');
-        const [courseResult, instructors] = await Promise.all([
+        params.append('type[]', 'TeacherEnrollment');
+        params.append('type[]', 'TaEnrollment');
+        params.append('state[]', 'active');
+        params.append('state[]', 'invited');
+        const [courseResult, enrollments] = await Promise.all([
           canvasApi.get(`/api/v1/courses/${encodeURIComponent(courseId)}`),
           canvasApi.getAll(
-            `/api/v1/courses/${encodeURIComponent(courseId)}/users?${params.toString()}`
+            `/api/v1/courses/${encodeURIComponent(courseId)}/enrollments?${params.toString()}`
           )
         ]);
+
+        const instructorsById = new Map();
+        for (const enrollment of enrollments) {
+          if (!isInstructorEmailRole(enrollment)) continue;
+          const instructor = enrollment.user || { id: enrollment.user_id };
+          const userId = String(instructor.id || enrollment.user_id || '');
+          if (!userId) continue;
+          const existing = instructorsById.get(userId) || {};
+          instructorsById.set(userId, {
+            ...existing,
+            ...instructor,
+            id: userId,
+            email: validEmailAddress(existing.email) || validEmailAddress(instructor.email),
+            login_id: validEmailAddress(existing.login_id) ||
+              validEmailAddress(instructor.login_id)
+          });
+        }
+        const instructors = Array.from(instructorsById.values());
 
         const missingEmailUsers = [];
         const emails = [];
