@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.13.1
+// @version      0.13.2
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -622,14 +622,11 @@
     return null;
   }
 
-  function sectionApiIdentifier(value, idType) {
+  function canvasSectionId(value) {
     const identifier = String(value ?? '').trim();
-    if (!identifier) throw new Error('Section ID is blank.');
-    if (idType === 'canvas') {
-      if (!/^\d+$/.test(identifier)) throw new Error('Canvas section ID must be numeric.');
-      return identifier;
-    }
-    return `sis_section_id:${identifier}`;
+    if (!identifier) throw new Error('Canvas section ID is blank.');
+    if (!/^\d+$/.test(identifier)) throw new Error('Canvas section ID must be numeric.');
+    return identifier;
   }
 
   function cloneSectionMarker(sourceSectionId) {
@@ -1811,21 +1808,15 @@
                       <p class="tool-description">Creates or synchronizes section clones from the uploaded CSV into this destination course. Analysis is read-only until the change plan is confirmed.</p>
                       <div class="mapping-grid">
                         <label class="field-label" for="uwm-clone-source-section-column">
-                          Source section ID column
+                          Canvas section ID column
                           <select class="field-select" id="uwm-clone-source-section-column" disabled></select>
-                        </label>
-                        <label class="field-label" for="uwm-clone-source-section-id-type">
-                          Source section ID type
-                          <select class="field-select" id="uwm-clone-source-section-id-type" disabled>
-                            <option value="canvas">Canvas section ID</option>
-                            <option value="sis">SIS section ID</option>
-                          </select>
                         </label>
                         <label class="field-label" for="uwm-clone-holding-course-id">
                           Holding-tank Canvas course ID
                           <input class="context-id" id="uwm-clone-holding-course-id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Example: 881410">
                         </label>
                       </div>
+                      <p class="tool-description">For a section-match report created by this drawer, choose <code>section.id — Canvas section ID</code>. The similarly named <code>section.sis_section_id</code> column is not the Canvas ID.</p>
                       <label class="scope-label" for="uwm-clone-limit-students" style="margin-top: 11px;">
                         <input class="scope-checkbox" id="uwm-clone-limit-students" type="checkbox" checked>
                         <span>Limit students to their cloned section</span>
@@ -1929,7 +1920,6 @@
     const enableNavigationProgress = shadowRoot.querySelector('#uwm-enable-navigation-progress');
     const enableNavigationStatusText = shadowRoot.querySelector('#uwm-enable-navigation-status-text');
     const cloneSourceSectionColumn = shadowRoot.querySelector('#uwm-clone-source-section-column');
-    const cloneSourceSectionIdType = shadowRoot.querySelector('#uwm-clone-source-section-id-type');
     const cloneHoldingCourseInput = shadowRoot.querySelector('#uwm-clone-holding-course-id');
     const cloneLimitStudents = shadowRoot.querySelector('#uwm-clone-limit-students');
     const cloneAnalyze = shadowRoot.querySelector('#uwm-clone-sections-analyze');
@@ -2188,7 +2178,7 @@
       };
     }
 
-    function populateColumnSelect(select, headers) {
+    function populateColumnSelect(select, headers, labelForHeader = header => header) {
       select.replaceChildren();
       const placeholder = document.createElement('option');
       placeholder.value = '';
@@ -2198,7 +2188,7 @@
       for (const header of headers) {
         const option = document.createElement('option');
         option.value = header;
-        option.textContent = header;
+        option.textContent = labelForHeader(header);
         select.appendChild(option);
       }
 
@@ -2249,7 +2239,6 @@
       const destinationIsValid = /^\d+$/.test(courseContextInput.value.trim());
       const holdingIsValid = /^\d+$/.test(cloneHoldingCourseInput.value.trim());
       cloneSourceSectionColumn.disabled = courseScopeLocked || !hasCsv;
-      cloneSourceSectionIdType.disabled = courseScopeLocked || !hasCsv;
       cloneHoldingCourseInput.disabled = courseScopeLocked;
       cloneLimitStudents.disabled = courseScopeLocked;
       courseCsvFileInput.disabled = courseScopeLocked;
@@ -2300,7 +2289,13 @@
           headers: parsed.headers,
           rows: parsed.rows
         };
-        populateColumnSelect(cloneSourceSectionColumn, parsed.headers);
+        populateColumnSelect(cloneSourceSectionColumn, parsed.headers, header => {
+          if (header === 'section.id') return 'section.id — Canvas section ID';
+          if (header === 'section.sis_section_id') {
+            return 'section.sis_section_id — SIS section ID';
+          }
+          return header;
+        });
         courseCsvStatus.textContent =
           `${file.name}: ${parsed.rows.length} data row(s), ${parsed.headers.length} column(s).`;
       } catch (error) {
@@ -2464,7 +2459,7 @@
         refreshCloneAvailability();
       });
     }
-    for (const select of [cloneSourceSectionColumn, cloneSourceSectionIdType]) {
+    for (const select of [cloneSourceSectionColumn]) {
       select.addEventListener('change', () => {
         resetCloneAnalysis();
         refreshCloneAvailability();
@@ -3650,10 +3645,7 @@
         const firstBySource = new Map();
         for (const entry of entries) {
           try {
-            entry.sourceRef = sectionApiIdentifier(
-              entry.sourceValue,
-              cloneSourceSectionIdType.value
-            );
+            entry.sourceRef = canvasSectionId(entry.sourceValue);
             if (firstBySource.has(entry.sourceRef)) {
               entry.status = 'duplicate_source';
               entry.error = `Duplicates CSV row ${firstBySource.get(entry.sourceRef).row['input.row']}.`;
@@ -3723,7 +3715,6 @@
           destinationCourseId,
           holdingCourseId,
           sourceColumn,
-          sourceIdType: cloneSourceSectionIdType.value,
           entries,
           roles
         };
