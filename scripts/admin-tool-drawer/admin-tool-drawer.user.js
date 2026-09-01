@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.17.0
+// @version      0.18.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1990,6 +1990,38 @@
                             </div>
                           </div>
                         </section>
+
+                        <section class="action-accordion-item" data-course-action="remove-admins">
+                          <button class="action-accordion-trigger" type="button" id="uwm-remove-admins-trigger" aria-expanded="false" aria-controls="uwm-remove-admins-panel">
+                            <span>Remove admins</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-remove-admins-panel" role="region" aria-labelledby="uwm-remove-admins-trigger" hidden>
+                            <p class="tool-description">Matches uploaded email addresses exactly against Canvas primary email, login ID, or integration ID, then finds active admin assignments in this Account and all descendant subaccounts. Terms and course publication do not apply.</p>
+                            <label class="field-label" for="uwm-remove-admins-email-column">
+                              Email address column
+                              <select class="field-select" id="uwm-remove-admins-email-column" disabled></select>
+                            </label>
+                            <button class="action-button" id="uwm-remove-admins-analyze" type="button" disabled>Review admin assignments</button>
+
+                            <div class="analysis-summary" id="uwm-remove-admins-analysis" hidden>
+                              <p id="uwm-remove-admins-analysis-text"></p>
+                            </div>
+
+                            <div class="confirmation" id="uwm-remove-admins-confirmation" hidden>
+                              <p id="uwm-remove-admins-confirmation-text"></p>
+                              <div class="confirmation-actions">
+                                <button class="confirmation-button primary" id="uwm-remove-admins-continue" type="button">Remove admin assignments</button>
+                                <button class="confirmation-button" id="uwm-remove-admins-cancel" type="button">Cancel</button>
+                              </div>
+                            </div>
+
+                            <div class="run-status" id="uwm-remove-admins-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-remove-admins-progress"></progress>
+                              <p id="uwm-remove-admins-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
                       </div>
                     </div>
                   </section>
@@ -2187,6 +2219,17 @@
     const observerCleanupStatus = shadowRoot.querySelector('#uwm-observer-cleanup-status');
     const observerCleanupProgress = shadowRoot.querySelector('#uwm-observer-cleanup-progress');
     const observerCleanupStatusText = shadowRoot.querySelector('#uwm-observer-cleanup-status-text');
+    const removeAdminsEmailColumn = shadowRoot.querySelector('#uwm-remove-admins-email-column');
+    const removeAdminsAnalyze = shadowRoot.querySelector('#uwm-remove-admins-analyze');
+    const removeAdminsAnalysis = shadowRoot.querySelector('#uwm-remove-admins-analysis');
+    const removeAdminsAnalysisText = shadowRoot.querySelector('#uwm-remove-admins-analysis-text');
+    const removeAdminsConfirmation = shadowRoot.querySelector('#uwm-remove-admins-confirmation');
+    const removeAdminsConfirmationText = shadowRoot.querySelector('#uwm-remove-admins-confirmation-text');
+    const removeAdminsContinue = shadowRoot.querySelector('#uwm-remove-admins-continue');
+    const removeAdminsCancel = shadowRoot.querySelector('#uwm-remove-admins-cancel');
+    const removeAdminsStatus = shadowRoot.querySelector('#uwm-remove-admins-status');
+    const removeAdminsProgress = shadowRoot.querySelector('#uwm-remove-admins-progress');
+    const removeAdminsStatusText = shadowRoot.querySelector('#uwm-remove-admins-status-text');
     const cloneSourceSectionColumn = shadowRoot.querySelector('#uwm-clone-source-section-column');
     const cloneLimitStudents = shadowRoot.querySelector('#uwm-clone-limit-students');
     const cloneAnalyze = shadowRoot.querySelector('#uwm-clone-sections-analyze');
@@ -2214,6 +2257,8 @@
     let enableNavigationRunning = false;
     let observerCleanupPlan = null;
     let observerCleanupRunning = false;
+    let removeAdminsPlan = null;
+    let removeAdminsRunning = false;
     let courseCsvScope = null;
     let cloneAnalysisPlan = null;
     let cloneExecutionPlan = null;
@@ -2384,7 +2429,7 @@
           : option.value === fallbackId;
       }
 
-      termSelect.disabled = false;
+      termSelect.disabled = adminScopeLocked;
       termStatus.classList.remove('is-error');
       termStatus.textContent = currentTermsExist
         ? `All Current Terms is selected (${grouped.current.length} term${grouped.current.length === 1 ? '' : 's'} today). Hold Ctrl or Command to add other terms.`
@@ -2769,11 +2814,15 @@
         !enableNavigationToolColumn.value ||
         !enableNavigationValueColumn.value ||
         enableNavigationRunning;
+      removeAdminsEmailColumn.disabled = adminScopeLocked || !hasCsv;
+      removeAdminsAnalyze.disabled = adminScopeLocked || removeAdminsRunning || !hasCsv ||
+        !removeAdminsEmailColumn.value || !/^\d+$/.test(adminContextInput.value.trim());
     }
 
     async function loadCsvScope(file) {
       resetEnableNavigationAnalysis();
       resetSectionReport();
+      resetRemoveAdmins();
       csvScope = null;
 
       if (!file) {
@@ -2817,6 +2866,10 @@
         );
         populateColumnSelect(
           enableNavigationValueColumn,
+          parsed.headers
+        );
+        populateColumnSelect(
+          removeAdminsEmailColumn,
           parsed.headers
         );
 
@@ -2904,6 +2957,7 @@
 
     adminContextInput.addEventListener('input', () => {
       resetObserverCleanup();
+      resetRemoveAdmins();
       scheduleTermsLoad();
     });
     publishedOnlyCheckbox.addEventListener('change', resetObserverCleanup);
@@ -2930,13 +2984,15 @@
       csvCourseIdType,
       sectionClassNumberColumn,
       enableNavigationToolColumn,
-      enableNavigationValueColumn
+      enableNavigationValueColumn,
+      removeAdminsEmailColumn
     ]) {
       select.addEventListener('change', () => {
         if (select === csvCourseColumn) {
           csvCourseIdType.value = /sis_course_id/i.test(csvCourseColumn.value) ? 'sis' : 'canvas';
         }
         if (select === sectionClassNumberColumn) resetSectionReport();
+        else if (select === removeAdminsEmailColumn) resetRemoveAdmins();
         else resetEnableNavigationAnalysis();
         refreshCsvActionAvailability();
       });
@@ -2994,6 +3050,16 @@
       observerCleanupContinue.disabled = false;
       observerCleanupCancel.disabled = false;
       refreshObserverCleanupAvailability();
+    }
+
+    function resetRemoveAdmins({ keepStatus = false } = {}) {
+      removeAdminsPlan = null;
+      removeAdminsAnalysis.hidden = true;
+      removeAdminsConfirmation.hidden = true;
+      removeAdminsContinue.disabled = false;
+      removeAdminsCancel.disabled = false;
+      if (!keepStatus) removeAdminsStatus.hidden = true;
+      refreshCsvActionAvailability();
     }
 
     function refreshObserverCleanupAvailability() {
@@ -4133,6 +4199,418 @@
       observerCleanupAnalyze.focus();
     });
     observerCleanupContinue.addEventListener('click', executeObserverCleanup);
+
+    function normalizedAdminEmail(value) {
+      const email = String(value || '').trim().toLowerCase();
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+    }
+
+    function showRemoveAdminsStatus(message, { isError = false } = {}) {
+      removeAdminsStatus.hidden = false;
+      removeAdminsStatus.classList.toggle('is-error', isError);
+      removeAdminsStatusText.textContent = message;
+    }
+
+    async function removeAdminsAccountTree(accountId) {
+      const [selectedResult, descendants] = await Promise.all([
+        canvasApi.get(`/api/v1/accounts/${encodeURIComponent(accountId)}`),
+        canvasApi.getAll(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/sub_accounts?recursive=true&per_page=100`
+        )
+      ]);
+      const accounts = [selectedResult.data || { id: accountId }, ...descendants];
+      return Array.from(
+        new Map(accounts.map(account => [String(account.id), account])).values()
+      );
+    }
+
+    function removeAdminsAccountDepth(account, accountById) {
+      let depth = 0;
+      let parentId = String(account.parent_account_id || '');
+      const visited = new Set();
+      while (parentId && accountById.has(parentId) && !visited.has(parentId)) {
+        visited.add(parentId);
+        depth++;
+        parentId = String(accountById.get(parentId)?.parent_account_id || '');
+      }
+      return depth;
+    }
+
+    function removeAdminsOutput(plan) {
+      const completedAt = new Date().toISOString();
+      const generatedColumns = [
+        'input.row',
+        'match.email',
+        'match.user_field',
+        'account.id',
+        'account.sis_account_id',
+        'account.name',
+        'account.parent_account_id',
+        'user.id',
+        'user.sis_user_id',
+        'user.integration_id',
+        'user.name',
+        'user.login_id',
+        'user.email',
+        'admin.id',
+        'admin.role',
+        'admin.role_id',
+        'admin.workflow_state',
+        'run.action',
+        'run.completed_at',
+        'run.status',
+        'run.error'
+      ];
+      const columnNames = [...plan.sourceHeaders];
+      for (const key of generatedColumns) {
+        if (!columnNames.includes(key)) columnNames.push(key);
+      }
+
+      const rows = [];
+      for (const source of plan.inputEntries) {
+        if (source.assignments.length) {
+          for (const assignment of source.assignments) {
+            const account = assignment.account;
+            const admin = assignment.admin;
+            const user = admin.user || {};
+            rows.push({
+              ...source.row,
+              'match.email': source.email,
+              'match.user_field': assignment.matchedField,
+              'account.id': account.id ?? '',
+              'account.sis_account_id': account.sis_account_id ?? '',
+              'account.name': account.name ?? '',
+              'account.parent_account_id': account.parent_account_id ?? '',
+              'user.id': user.id ?? '',
+              'user.sis_user_id': user.sis_user_id ?? '',
+              'user.integration_id': user.integration_id ?? '',
+              'user.name': user.name ?? '',
+              'user.login_id': user.login_id ?? '',
+              'user.email': user.email ?? '',
+              'admin.id': admin.id ?? '',
+              'admin.role': admin.role ?? '',
+              'admin.role_id': admin.role_id ?? '',
+              'admin.workflow_state': admin.workflow_state ?? '',
+              'run.action': 'remove_account_admin',
+              'run.completed_at': completedAt,
+              'run.status': assignment.status,
+              'run.error': assignment.error
+            });
+          }
+          continue;
+        }
+
+        rows.push({
+          ...source.row,
+          'match.email': source.email,
+          'match.user_field': '',
+          'account.id': '',
+          'account.sis_account_id': '',
+          'account.name': '',
+          'account.parent_account_id': '',
+          'user.id': '',
+          'user.sis_user_id': '',
+          'user.integration_id': '',
+          'user.name': '',
+          'user.login_id': '',
+          'user.email': '',
+          'admin.id': '',
+          'admin.role': '',
+          'admin.role_id': '',
+          'admin.workflow_state': '',
+          'run.action': 'remove_account_admin',
+          'run.completed_at': completedAt,
+          'run.status': source.status === 'candidate' ? 'no_admin_assignments' : source.status,
+          'run.error': source.error
+        });
+      }
+      return { rows, columns: columnNames.map(key => ({ key, label: key })) };
+    }
+
+    function downloadRemoveAdminsResults(plan) {
+      downloadCsv({
+        ...removeAdminsOutput(plan),
+        filename: `admin-remove.acct-${plan.accountId}.${timestampForFilename()}.csv`
+      });
+    }
+
+    async function analyzeRemoveAdmins() {
+      if (removeAdminsRunning || navigationReportRunning || shortNameReportRunning ||
+        sectionReportRunning || enableNavigationRunning || observerCleanupRunning ||
+        cloneRunning || emailInstructorsRunning || !csvScope) return;
+      const accountId = adminContextInput.value.trim();
+      if (!/^\d+$/.test(accountId)) {
+        adminContextInput.setCustomValidity('Enter a numeric Canvas account ID.');
+        adminContextInput.reportValidity();
+        adminContextInput.focus();
+        return;
+      }
+      const emailColumn = removeAdminsEmailColumn.value;
+      if (!emailColumn) {
+        showRemoveAdminsStatus('Choose the CSV email address column first.', { isError: true });
+        removeAdminsEmailColumn.focus();
+        return;
+      }
+
+      removeAdminsRunning = true;
+      removeAdminsPlan = null;
+      removeAdminsAnalysis.hidden = true;
+      removeAdminsConfirmation.hidden = true;
+      removeAdminsProgress.removeAttribute('value');
+      removeAdminsProgress.removeAttribute('max');
+      setDrawerOperationLock(true, removeAdminsAnalyze);
+      setAdminScopeLocked(true);
+      showRemoveAdminsStatus('Reading email addresses and loading the Account hierarchy…');
+
+      try {
+        const firstByEmail = new Map();
+        const inputEntries = csvScope.rows.map(row => {
+          const rawEmail = String(row[emailColumn] || '').trim();
+          const email = normalizedAdminEmail(rawEmail);
+          const entry = {
+            row: { ...row },
+            email,
+            status: 'candidate',
+            error: '',
+            assignments: []
+          };
+          if (!email) {
+            entry.status = 'invalid_email';
+            entry.error = rawEmail
+              ? `Not a valid email address: ${rawEmail}`
+              : 'Email address is blank.';
+          } else if (firstByEmail.has(email)) {
+            entry.status = 'duplicate_input';
+            entry.error = `Duplicates input row ${firstByEmail.get(email).row['input.row']}.`;
+          } else {
+            firstByEmail.set(email, entry);
+          }
+          return entry;
+        });
+        const targetEmails = new Set(firstByEmail.keys());
+        if (!targetEmails.size) {
+          throw new Error('The selected CSV column does not contain any valid email addresses.');
+        }
+
+        const accounts = await removeAdminsAccountTree(accountId);
+        const accountById = new Map(accounts.map(account => [String(account.id), account]));
+        removeAdminsProgress.max = Math.max(1, accounts.length);
+        removeAdminsProgress.value = 0;
+        let completedAccounts = 0;
+        const accountErrors = [];
+        const assignmentsByKey = new Map();
+
+        await Promise.all(accounts.map(async account => {
+          try {
+            const params = new URLSearchParams({ per_page: '100' });
+            params.append('include[]', 'email');
+            const admins = await canvasApi.getAll(
+              `/api/v1/accounts/${encodeURIComponent(String(account.id))}/admins?${params.toString()}`
+            );
+            for (const admin of admins) {
+              if (String(admin.workflow_state || '').toLowerCase() !== 'active') continue;
+              const user = admin.user || {};
+              const identifiers = [
+                ['email', user.email],
+                ['integration_id', user.integration_id],
+                ['login_id', user.login_id]
+              ];
+              const matched = identifiers.find(([, value]) => (
+                targetEmails.has(normalizedAdminEmail(value))
+              ));
+              if (!matched) continue;
+              const matchedEmail = normalizedAdminEmail(matched[1]);
+              const source = firstByEmail.get(matchedEmail);
+              const roleId = String(admin.role_id || '').trim();
+              const userId = String(user.id || '').trim();
+              if (!roleId || !userId) {
+                accountErrors.push(
+                  `Account ${account.id} returned a matched admin without a user ID or role ID.`
+                );
+                continue;
+              }
+              const key = `${account.id}\u0000${userId}\u0000${roleId}`;
+              if (assignmentsByKey.has(key)) continue;
+              const assignment = {
+                account,
+                admin,
+                source,
+                matchedField: matched[0],
+                depth: removeAdminsAccountDepth(account, accountById),
+                status: 'will_delete',
+                error: ''
+              };
+              assignmentsByKey.set(key, assignment);
+              source.assignments.push(assignment);
+            }
+          } catch (error) {
+            accountErrors.push(`Account ${account.id}: ${error.message}`);
+          } finally {
+            completedAccounts++;
+            removeAdminsProgress.value = completedAccounts;
+            showRemoveAdminsStatus(
+              `Checking Account admins: ${completedAccounts} of ${accounts.length}.`
+            );
+          }
+        }));
+
+        const assignments = Array.from(assignmentsByKey.values());
+        const matchedEmails = new Set(assignments.map(assignment => assignment.source.email));
+        const matchedUsers = new Set(assignments.map(assignment => (
+          String(assignment.admin.user?.id || '')
+        )));
+        const matchedAccounts = new Set(assignments.map(assignment => (
+          String(assignment.account.id)
+        )));
+        const unmatchedCount = Array.from(firstByEmail.values())
+          .filter(entry => !matchedEmails.has(entry.email)).length;
+        const invalidCount = inputEntries.filter(entry => entry.status === 'invalid_email').length;
+        const duplicateCount = inputEntries.filter(entry => entry.status === 'duplicate_input').length;
+        const currentUserId = String(
+          window.ENV?.current_user_id || window.ENV?.current_user?.id || ''
+        );
+        const selfAssignmentCount = assignments.filter(assignment => (
+          String(assignment.admin.user?.id || '') === currentUserId
+        )).length;
+
+        removeAdminsPlan = {
+          accountId,
+          sourceFileName: csvScope.fileName,
+          sourceHeaders: [...csvScope.headers],
+          emailColumn,
+          inputEntries,
+          assignments,
+          currentUserId
+        };
+        removeAdminsAnalysisText.textContent =
+          `${assignments.length} active admin assignment(s) matched ${matchedUsers.size} user(s) ` +
+          `across ${matchedAccounts.size} Account(s). ${unmatchedCount} valid email(s) had no admin ` +
+          `assignment; ${invalidCount} invalid and ${duplicateCount} duplicate input row(s).`;
+        removeAdminsAnalysis.hidden = false;
+
+        if (accountErrors.length) {
+          removeAdminsPlan = null;
+          showRemoveAdminsStatus(
+            `Review incomplete: ${accountErrors.length} Account request(s) failed. Nothing can be ` +
+            `removed until the full hierarchy can be checked. ${accountErrors[0]}`,
+            { isError: true }
+          );
+          setDrawerOperationLock(false);
+          setAdminScopeLocked(false);
+          return;
+        }
+
+        if (!assignments.length) {
+          showRemoveAdminsStatus(
+            'Review complete. None of the supplied email addresses has an active admin assignment in this Account hierarchy.'
+          );
+          setDrawerOperationLock(false);
+          setAdminScopeLocked(false);
+          return;
+        }
+
+        removeAdminsConfirmationText.textContent =
+          `Remove ${assignments.length} active admin assignment(s) from ${matchedUsers.size} user(s) ` +
+          `across ${matchedAccounts.size} Account(s)? This includes account ${accountId} and all ` +
+          `descendant subaccounts.${selfAssignmentCount ? ` Your own ${selfAssignmentCount} matched assignment(s) are included and will be removed last.` : ''}`;
+        removeAdminsConfirmation.hidden = false;
+        showRemoveAdminsStatus('Read-only review complete. No admin assignments have been changed.');
+        removeAdminsContinue.focus();
+      } catch (error) {
+        console.error('Remove admins review failed.', error);
+        removeAdminsPlan = null;
+        showRemoveAdminsStatus(`Review stopped: ${error.message}`, { isError: true });
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      } finally {
+        removeAdminsRunning = false;
+        refreshCsvActionAvailability();
+      }
+    }
+
+    async function executeRemoveAdmins() {
+      if (!removeAdminsPlan || removeAdminsRunning) return;
+      removeAdminsRunning = true;
+      setDrawerOperationLock(true, removeAdminsContinue);
+      removeAdminsConfirmation.hidden = true;
+      removeAdminsContinue.disabled = true;
+      removeAdminsCancel.disabled = true;
+      const plan = removeAdminsPlan;
+      const ordinaryAssignments = plan.assignments.filter(assignment => (
+        String(assignment.admin.user?.id || '') !== plan.currentUserId
+      ));
+      const selfAssignments = plan.assignments.filter(assignment => (
+        String(assignment.admin.user?.id || '') === plan.currentUserId
+      )).sort((left, right) => right.depth - left.depth);
+      let completed = 0;
+      let removed = 0;
+      let failed = 0;
+      removeAdminsProgress.max = Math.max(1, plan.assignments.length);
+      removeAdminsProgress.value = 0;
+      showRemoveAdminsStatus(`Removing admin assignments: 0 of ${plan.assignments.length}.`);
+
+      const removeAssignment = async assignment => {
+        try {
+          const accountId = String(assignment.account.id);
+          const userId = String(assignment.admin.user.id);
+          const roleId = String(assignment.admin.role_id);
+          await canvasApi.request(
+            `/api/v1/accounts/${encodeURIComponent(accountId)}/admins/` +
+            `${encodeURIComponent(userId)}?role_id=${encodeURIComponent(roleId)}`,
+            { method: 'DELETE' }
+          );
+          assignment.status = 'deleted';
+          assignment.error = '';
+          removed++;
+        } catch (error) {
+          assignment.status = 'error';
+          assignment.error = error.message;
+          failed++;
+        } finally {
+          completed++;
+          removeAdminsProgress.value = completed;
+          showRemoveAdminsStatus(
+            `Removing admin assignments: ${completed} of ${plan.assignments.length}. ` +
+            `Removed: ${removed}. Errors: ${failed}.`,
+            { isError: failed > 0 }
+          );
+        }
+      };
+
+      try {
+        await Promise.all(ordinaryAssignments.map(removeAssignment));
+        for (const assignment of selfAssignments) await removeAssignment(assignment);
+        downloadRemoveAdminsResults(plan);
+        removeAdminsAnalysisText.textContent =
+          `${removed} admin assignment(s) removed; ${failed} error(s).`;
+        removeAdminsAnalysis.hidden = false;
+        showRemoveAdminsStatus(
+          `Complete. ${removed} admin assignment(s) removed; ${failed} error(s). Results CSV downloaded.`,
+          { isError: failed > 0 }
+        );
+      } catch (error) {
+        console.error('Remove admins action failed.', error);
+        showRemoveAdminsStatus(`Removal stopped: ${error.message}`, { isError: true });
+      } finally {
+        removeAdminsRunning = false;
+        removeAdminsPlan = null;
+        removeAdminsContinue.disabled = false;
+        removeAdminsCancel.disabled = false;
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      }
+    }
+
+    removeAdminsAnalyze.addEventListener('click', analyzeRemoveAdmins);
+    removeAdminsCancel.addEventListener('click', () => {
+      if (removeAdminsRunning) return;
+      removeAdminsPlan = null;
+      removeAdminsConfirmation.hidden = true;
+      setDrawerOperationLock(false);
+      setAdminScopeLocked(false);
+      removeAdminsAnalyze.focus();
+    });
+    removeAdminsContinue.addEventListener('click', executeRemoveAdmins);
 
     function courseApiIdentifier(value, idType) {
       const identifier = String(value ?? '').trim();
