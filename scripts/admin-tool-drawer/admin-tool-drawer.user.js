@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.19.0
+// @version      0.20.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -2034,6 +2034,11 @@
                               Email address column
                               <select class="field-select" id="uwm-enroll-admins-email-column" disabled></select>
                             </label>
+                            <label class="scope-label" for="uwm-enroll-admins-cohort" style="margin: 12px 0 5px;">
+                              <input class="scope-checkbox" id="uwm-enroll-admins-cohort" type="checkbox">
+                              <span>Apply every course exclusion to the entire cohort</span>
+                            </label>
+                            <p class="tool-description">Off: each person has their own exclusions. On: a course taken by anyone in the CSV blocks that Account and its parents for everyone.</p>
                             <button class="action-button" id="uwm-enroll-admins-analyze" type="button" disabled>Review placements</button>
 
                             <div class="analysis-summary" id="uwm-enroll-admins-analysis" hidden>
@@ -2269,6 +2274,7 @@
     const removeAdminsProgress = shadowRoot.querySelector('#uwm-remove-admins-progress');
     const removeAdminsStatusText = shadowRoot.querySelector('#uwm-remove-admins-status-text');
     const enrollAdminsEmailColumn = shadowRoot.querySelector('#uwm-enroll-admins-email-column');
+    const enrollAdminsCohort = shadowRoot.querySelector('#uwm-enroll-admins-cohort');
     const enrollAdminsAnalyze = shadowRoot.querySelector('#uwm-enroll-admins-analyze');
     const enrollAdminsAnalysis = shadowRoot.querySelector('#uwm-enroll-admins-analysis');
     const enrollAdminsAnalysisText = shadowRoot.querySelector('#uwm-enroll-admins-analysis-text');
@@ -2870,6 +2876,7 @@
       removeAdminsAnalyze.disabled = adminScopeLocked || removeAdminsRunning || !hasCsv ||
         !removeAdminsEmailColumn.value || !/^\d+$/.test(adminContextInput.value.trim());
       enrollAdminsEmailColumn.disabled = adminScopeLocked || !hasCsv;
+      enrollAdminsCohort.disabled = adminScopeLocked || !hasCsv;
       enrollAdminsAnalyze.disabled = adminScopeLocked || enrollAdminsRunning || !hasCsv ||
         !enrollAdminsEmailColumn.value || !/^\d+$/.test(adminContextInput.value.trim());
     }
@@ -3021,6 +3028,7 @@
       resetEnrollAdmins();
       scheduleTermsLoad();
     });
+    enrollAdminsCohort.addEventListener('change', resetEnrollAdmins);
     publishedOnlyCheckbox.addEventListener('change', resetObserverCleanup);
     csvFileInput.addEventListener('change', () => loadCsvScope(csvFileInput.files?.[0]));
     courseCsvFileInput.addEventListener('change', () => loadCourseCsvScope(courseCsvFileInput.files?.[0]));
@@ -4801,11 +4809,14 @@
       }
       plan.roleId = roleId;
       plan.role = role?.label || '';
+      const exclusionMode = plan.cohortExclusions
+        ? 'Shared cohort exclusions are active. '
+        : 'Exclusions are calculated separately for each person. ';
       enrollAdminsConfirmationText.textContent = createCount
-        ? `Create ${createCount} ${role?.label || 'admin'} assignment(s) for ${peopleCount} ` +
+        ? `${exclusionMode}Create ${createCount} ${role?.label || 'admin'} assignment(s) for ${peopleCount} ` +
           `person(s) at their highest safe subaccounts? ${alreadyCount} placement(s) are already ` +
           'covered by this role and will not be duplicated. Canvas notification emails will not be sent.'
-        : `Every safe placement is already covered by the ${role?.label || 'selected'} role. ` +
+        : `${exclusionMode}Every safe placement is already covered by the ${role?.label || 'selected'} role. ` +
           'No new admin assignments are needed.';
       enrollAdminsContinue.disabled = createCount === 0;
     }
@@ -4828,6 +4839,8 @@
         'account.parent_account_id',
         'role.id',
         'role.name',
+        'scope.cohort_exclusions',
+        'scope.individual_blocked_account_ids',
         'scope.blocked_account_ids',
         'scope.active_student_course_ids',
         'run.report_id',
@@ -4862,6 +4875,8 @@
               'account.parent_account_id': placement.account.parent_account_id ?? '',
               'role.id': placement.roleId || plan.roleId || '',
               'role.name': placement.role || plan.role || '',
+              'scope.cohort_exclusions': plan.cohortExclusions,
+              'scope.individual_blocked_account_ids': person.individualBlockedAccountIds.join('|'),
               'scope.blocked_account_ids': person.blockedAccountIds.join('|'),
               'scope.active_student_course_ids': person.activeCourseIds.join('|'),
               'run.report_id': plan.reportId,
@@ -4889,6 +4904,9 @@
             'account.parent_account_id': '',
             'role.id': plan.roleId || '',
             'role.name': plan.role || '',
+            'scope.cohort_exclusions': plan.cohortExclusions,
+            'scope.individual_blocked_account_ids':
+              person?.individualBlockedAccountIds?.join('|') || '',
             'scope.blocked_account_ids': person?.blockedAccountIds?.join('|') || '',
             'scope.active_student_course_ids': person?.activeCourseIds?.join('|') || '',
             'run.report_id': plan.reportId,
@@ -4915,6 +4933,7 @@
         return;
       }
       const emailColumn = enrollAdminsEmailColumn.value;
+      const cohortExclusions = enrollAdminsCohort.checked;
       if (!emailColumn) {
         showEnrollAdminsStatus('Choose the CSV email address column first.', { isError: true });
         enrollAdminsEmailColumn.focus();
@@ -5019,6 +5038,7 @@
               user: exact[0].user,
               matchedField: exact[0].matchedField,
               activeCourseIds: [],
+              individualBlockedAccountIds: [],
               blockedAccountIds: [],
               placements: []
             };
@@ -5074,6 +5094,13 @@
               if (ancestorId === accountId) break;
             }
           }
+          person.individualBlockedAccountIds = Array.from(blocked);
+        }
+        const cohortBlocked = cohortExclusions
+          ? new Set(people.flatMap(person => person.individualBlockedAccountIds))
+          : null;
+        for (const person of people) {
+          const blocked = cohortBlocked || new Set(person.individualBlockedAccountIds);
           person.blockedAccountIds = Array.from(blocked);
           person.placements = accounts
             .filter(account => {
@@ -5112,11 +5139,13 @@
           adminRows: provisioning.admins,
           reportId: provisioning.reportId,
           roles,
+          cohortExclusions,
           roleId: '',
           role: ''
         };
         enrollAdminsAnalysisText.textContent =
-          `${placementCount} highest-safe placement(s) found for ${people.length} person(s). ` +
+          `${placementCount} highest-safe placement(s) found for ${people.length} person(s) using ` +
+          `${cohortExclusions ? 'shared cohort exclusions' : 'individual exclusions'}. ` +
           `${noMatchCount} unmatched, ${ambiguousCount} ambiguous, ${invalidCount} invalid, and ` +
           `${duplicateCount} duplicate input row(s). Large sibling branches are intentionally ` +
           `expanded when their parent is blocked.${fanOutSummary ? ` Placements by person: ` +

@@ -190,6 +190,12 @@ schools eligible. Likewise, when one department blocks a large college, its unaf
 departments remain eligible. The tool creates a placement at every safe Account whose parent is
 blocked, producing the smallest set of highest-safe roots that covers all eligible branches.
 
+By default, exclusions are calculated independently: every person is an island. The optional
+**Apply every course exclusion to the entire cohort** checkbox unions the blocked Accounts for all
+matched people. When enabled, a course taken by any person blocks its owning Account and ancestors
+for everyone in the uploaded cohort. Safe children and sibling branches are still retained. The
+review and results CSV state whether individual or shared cohort exclusions were used.
+
 The Account hierarchy comes from the recursive Subaccounts API. One Provisioning `admins.csv`
 report supplies existing assignments and the available admin role labels and IDs. After placement
 analysis, the user must choose an admin role; nothing is selected automatically. Existing coverage
