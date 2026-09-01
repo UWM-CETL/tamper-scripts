@@ -69,6 +69,28 @@ filename because it can represent multiple selections. The selected scope remain
 `scope.enrollment_term_ids` and `scope.enrollment_term_names`, while each row identifies its course's
 term through `term.id`, `term.sis_term_id`, and `term.name`.
 
+### Numeric course short-name report
+
+Under **Account → Courses**, **Find numeric course short names** checks the Canvas `course_code`
+(the course short name) for every course in the selected Account, term, and publication scope. It
+selects only exact values matching `^-\d+$`: one hyphen, one or more digits, and nothing else.
+Examples such as `-1` and `-20493` match; surrounding spaces, letters, or additional punctuation do
+not.
+
+The initial Account Courses API request includes `total_students`, which Canvas defines as the number
+of active and invited students. Only courses matching the short-name pattern receive additional API
+requests. The report loads their active and invited Teacher and TA-base enrollments, retains the exact
+roles **Teacher**, **TA**, and **TA Grader**, and loads their course sections. Manually created sections
+without a `sis_section_id` are excluded. A matched course without any SIS-created section is counted
+in the completion summary and remains in the CSV with blank section fields and
+`run.status=no_sis_sections`; API failures remain visible as error rows.
+
+Each course occupies one CSV row. Pipe-delimited `teacher.*` fields retain aligned Canvas IDs, SIS
+IDs, names, and roles; `section.*` fields retain aligned Canvas IDs, SIS section IDs, and names. Course
+fields include `course.id`, `course.sis_course_id`, `course.name`, `course.course_code`,
+`course.enrollment_term_id`, and `course.total_students`. The compact filename is
+`shortname.acct-<account-id>.<pub|unpub>.<timestamp>.csv`.
+
 ### Sections and class numbers report
 
 Under **Account → Courses**, **Get sections and class numbers** matches a selected column in the

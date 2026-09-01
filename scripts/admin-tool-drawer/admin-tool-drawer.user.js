@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Admin Tool Drawer
 // @namespace    https://uwm.edu/
-// @version      0.16.0
+// @version      0.17.0
 // @description  Adds a clearly marked admin-only tool drawer to Canvas.
 // @match        https://*.instructure.com/*
 // @run-at       document-idle
@@ -1858,6 +1858,22 @@
                           </div>
                         </section>
 
+                        <section class="action-accordion-item" data-course-action="short-name-report">
+                          <button class="action-accordion-trigger" type="button" id="uwm-short-name-report-trigger" aria-expanded="false" aria-controls="uwm-short-name-report-panel">
+                            <span>Find numeric course short names</span>
+                            <span class="accordion-chevron" aria-hidden="true">›</span>
+                          </button>
+                          <div class="action-accordion-panel" id="uwm-short-name-report-panel" role="region" aria-labelledby="uwm-short-name-report-trigger" hidden>
+                            <p class="tool-description">Reports courses whose short name is exactly a hyphen followed by one or more digits, such as <code>-123</code>. Only SIS-created sections are included.</p>
+                            <button class="report-trigger" id="uwm-short-name-report" type="button" disabled>Generate report</button>
+
+                            <div class="run-status" id="uwm-short-name-status" role="status" aria-live="polite" hidden>
+                              <progress class="run-progress" id="uwm-short-name-progress"></progress>
+                              <p id="uwm-short-name-status-text"></p>
+                            </div>
+                          </div>
+                        </section>
+
                         <section class="action-accordion-item" data-course-action="section-report">
                           <button class="action-accordion-trigger" type="button" id="uwm-section-report-trigger" aria-expanded="false" aria-controls="uwm-section-report-panel">
                             <span>Get sections and class numbers</span>
@@ -2136,6 +2152,10 @@
     const navigationStatus = shadowRoot.querySelector('#uwm-navigation-links-status');
     const navigationStatusText = shadowRoot.querySelector('#uwm-navigation-links-status-text');
     const navigationProgress = shadowRoot.querySelector('#uwm-navigation-links-progress');
+    const shortNameReportTrigger = shadowRoot.querySelector('#uwm-short-name-report');
+    const shortNameStatus = shadowRoot.querySelector('#uwm-short-name-status');
+    const shortNameStatusText = shadowRoot.querySelector('#uwm-short-name-status-text');
+    const shortNameProgress = shadowRoot.querySelector('#uwm-short-name-progress');
     const sectionReportTrigger = shadowRoot.querySelector('#uwm-sections-report');
     const sectionConfirmation = shadowRoot.querySelector('#uwm-sections-confirmation');
     const sectionConfirmationText = shadowRoot.querySelector('#uwm-sections-confirmation-text');
@@ -2185,6 +2205,7 @@
 
     let pendingNavigationScope = null;
     let navigationReportRunning = false;
+    let shortNameReportRunning = false;
     let pendingSectionScope = null;
     let sectionReportRunning = false;
     let adminScopeLocked = false;
@@ -2369,6 +2390,7 @@
         ? `All Current Terms is selected (${grouped.current.length} term${grouped.current.length === 1 ? '' : 's'} today). Hold Ctrl or Command to add other terms.`
         : 'No current dated terms were found; a safer fallback was selected. Hold Ctrl or Command to select more than one.';
       refreshObserverCleanupAvailability();
+      refreshShortNameReportAvailability();
     }
 
     async function loadTermsForAccount(accountId) {
@@ -2420,6 +2442,7 @@
         termStatus.classList.add('is-error');
         termStatus.textContent = `Terms could not be loaded: ${error.message}`;
         refreshObserverCleanupAvailability();
+        refreshShortNameReportAvailability();
       }
     }
 
@@ -2435,6 +2458,7 @@
         termStatus.classList.remove('is-error');
         termStatus.textContent = 'Current terms are selected automatically. Hold Ctrl or Command to select more than one.';
         refreshObserverCleanupAvailability();
+        refreshShortNameReportAvailability();
         return;
       }
 
@@ -2464,6 +2488,23 @@
         terms,
         label: labelParts.join(', ')
       };
+    }
+
+    async function accountCoursesForScope(scope, { includes = [], onPage } = {}) {
+      const termRequests = scope.allTerms ? [null] : scope.terms;
+      const courseLists = await Promise.all(termRequests.map(term => {
+        const params = new URLSearchParams({ per_page: '100' });
+        if (scope.publishedOnly) params.set('published', 'true');
+        if (term) params.set('enrollment_term_id', String(term.id));
+        for (const include of includes) params.append('include[]', include);
+        return canvasApi.getAll(
+          `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${params.toString()}`,
+          { onPage }
+        );
+      }));
+      return Array.from(
+        new Map(courseLists.flat().map(course => [String(course.id), course])).values()
+      );
     }
 
     function populateColumnSelect(select, headers, labelForHeader = header => header) {
@@ -2914,6 +2955,7 @@
         : 'Select at least one term scope.';
       resetObserverCleanup();
       refreshObserverCleanupAvailability();
+      refreshShortNameReportAvailability();
     });
 
     openContext(canvasContext.activeContext);
@@ -2931,6 +2973,17 @@
         !availableTerms.length;
       refreshCsvActionAvailability();
       refreshObserverCleanupAvailability();
+      refreshShortNameReportAvailability();
+    }
+
+    function refreshShortNameReportAvailability() {
+      const accountId = adminContextInput.value.trim();
+      const termsReady = /^\d+$/.test(accountId) &&
+        termsAccountId === accountId &&
+        !termSelect.disabled;
+      const termScope = termsReady ? selectedTermScope() : { allTerms: false, terms: [] };
+      shortNameReportTrigger.disabled = adminScopeLocked || shortNameReportRunning ||
+        !termsReady || (!termScope.allTerms && !termScope.terms.length);
     }
 
     function resetObserverCleanup() {
@@ -3029,31 +3082,18 @@
 
         let loadedCourseCount = 0;
         let loadedCoursePages = 0;
-        const termRequests = scope.allTerms ? [null] : scope.terms;
-        const courseLists = await Promise.all(termRequests.map(async term => {
-          const courseParams = new URLSearchParams({ per_page: '100' });
-          courseParams.append('include[]', 'term');
-          if (scope.publishedOnly) courseParams.set('published', 'true');
-          if (term) courseParams.set('enrollment_term_id', String(term.id));
-
-          return canvasApi.getAll(
-            `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${courseParams.toString()}`,
-            {
-              onPage: page => {
-                loadedCourseCount += page.pageItems;
-                loadedCoursePages++;
-                const rateText = page.rateRemaining === null
-                  ? ''
-                  : ` Canvas quota remaining: ${page.rateRemaining}.`;
-                navigationStatusText.textContent =
-                  `Loading courses: ${loadedCourseCount} found across ${loadedCoursePages} page(s).${rateText}`;
-              }
-            }
-          );
-        }));
-        const courses = Array.from(
-          new Map(courseLists.flat().map(course => [String(course.id), course])).values()
-        );
+        const courses = await accountCoursesForScope(scope, {
+          includes: ['term'],
+          onPage: page => {
+            loadedCourseCount += page.pageItems;
+            loadedCoursePages++;
+            const rateText = page.rateRemaining === null
+              ? ''
+              : ` Canvas quota remaining: ${page.rateRemaining}.`;
+            navigationStatusText.textContent =
+              `Loading courses: ${loadedCourseCount} found across ${loadedCoursePages} page(s).${rateText}`;
+          }
+        });
 
         navigationProgress.max = Math.max(1, courses.length);
         navigationProgress.value = 0;
@@ -3215,6 +3255,245 @@
       navigationCancel.disabled = true;
       runNavigationLinksReport(pendingNavigationScope);
     });
+
+    function showShortNameStatus(message, { isError = false } = {}) {
+      shortNameStatus.hidden = false;
+      shortNameStatus.classList.toggle('is-error', isError);
+      shortNameStatusText.textContent = message;
+    }
+
+    async function shortNameCourseRow(course, scope) {
+      const enrollmentParams = new URLSearchParams({ per_page: '100' });
+      enrollmentParams.append('type[]', 'TeacherEnrollment');
+      enrollmentParams.append('type[]', 'TaEnrollment');
+      enrollmentParams.append('state[]', 'active');
+      enrollmentParams.append('state[]', 'invited');
+      const courseId = String(course.id);
+      const [enrollmentResult, sectionResult] = await Promise.allSettled([
+        canvasApi.getAll(
+          `/api/v1/courses/${encodeURIComponent(courseId)}/enrollments?${enrollmentParams.toString()}`
+        ),
+        canvasApi.getAll(
+          `/api/v1/courses/${encodeURIComponent(courseId)}/sections?per_page=100`
+        )
+      ]);
+
+      const errors = [];
+      const enrollments = enrollmentResult.status === 'fulfilled'
+        ? enrollmentResult.value
+        : [];
+      if (enrollmentResult.status === 'rejected') {
+        errors.push(`Instructors: ${enrollmentResult.reason.message}`);
+      }
+      if (sectionResult.status === 'rejected') {
+        errors.push(`Sections: ${sectionResult.reason.message}`);
+      }
+
+      const instructors = Array.from(new Map(enrollments
+        .filter(isInstructorEmailRole)
+        .map(enrollment => {
+          const user = enrollment.user || { id: enrollment.user_id };
+          const role = String(enrollment.role || enrollment.type || '').trim();
+          return [`${user.id ?? enrollment.user_id}\u0000${role}`, {
+            id: user.id ?? enrollment.user_id ?? '',
+            sisUserId: user.sis_user_id ?? '',
+            name: user.name ?? user.sortable_name ?? '',
+            role
+          }];
+        })).values()).sort((left, right) => (
+          String(left.name).localeCompare(String(right.name)) ||
+          String(left.role).localeCompare(String(right.role))
+        ));
+
+      const sisSections = sectionResult.status === 'fulfilled'
+        ? sectionResult.value.filter(section => String(section.sis_section_id || '').trim())
+        : [];
+      sisSections.sort((left, right) => (
+        String(left.sis_section_id).localeCompare(String(right.sis_section_id), undefined, {
+          numeric: true
+        })
+      ));
+
+      const noSisSections = sectionResult.status === 'fulfilled' && !sisSections.length;
+
+      return {
+        row: {
+          'scope.account_id': scope.accountId,
+          'scope.published': scope.publishedOnly,
+          'scope.enrollment_term_ids': scope.allTerms
+            ? 'all'
+            : scope.terms.map(term => term.id).join('|'),
+          'scope.enrollment_term_names': scope.termLabel,
+          'course.id': course.id ?? '',
+          'course.sis_course_id': course.sis_course_id ?? '',
+          'course.name': course.name ?? '',
+          'course.course_code': course.course_code ?? '',
+          'course.enrollment_term_id': course.enrollment_term_id ?? '',
+          'course.total_students': course.total_students ?? '',
+          'teacher.ids': instructors.map(instructor => instructor.id).join('|'),
+          'teacher.sis_user_ids': instructors.map(instructor => instructor.sisUserId).join('|'),
+          'teacher.names': instructors.map(instructor => instructor.name).join('|'),
+          'teacher.roles': instructors.map(instructor => instructor.role).join('|'),
+          'section.ids': sisSections.map(section => section.id ?? '').join('|'),
+          'section.sis_section_ids': sisSections.map(section => section.sis_section_id).join('|'),
+          'section.names': sisSections.map(section => section.name ?? '').join('|'),
+          'run.generated_at': scope.generatedAt,
+          'run.status': errors.length ? 'error' : (noSisSections ? 'no_sis_sections' : 'ok'),
+          'run.error': errors.join(' | ')
+        },
+        noSisSections,
+        hadError: errors.length > 0
+      };
+    }
+
+    async function runShortNameReport() {
+      if (shortNameReportRunning || navigationReportRunning || sectionReportRunning ||
+        enableNavigationRunning || observerCleanupRunning || cloneRunning ||
+        emailInstructorsRunning) return;
+      const accountId = adminContextInput.value.trim();
+      if (!/^\d+$/.test(accountId)) {
+        adminContextInput.setCustomValidity('Enter a numeric Canvas account ID.');
+        adminContextInput.reportValidity();
+        adminContextInput.focus();
+        return;
+      }
+      if (termSelect.disabled || termsAccountId !== accountId) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Wait for the terms for this account to finish loading.';
+        return;
+      }
+      const termScope = selectedTermScope();
+      if (!termScope.allTerms && !termScope.terms.length) {
+        termStatus.classList.add('is-error');
+        termStatus.textContent = 'Select at least one term scope before generating the report.';
+        termSelect.focus();
+        return;
+      }
+      const scope = {
+        accountId,
+        publishedOnly: publishedOnlyCheckbox.checked,
+        allTerms: termScope.allTerms,
+        terms: termScope.terms,
+        termLabel: termScope.label,
+        generatedAt: new Date().toISOString()
+      };
+
+      shortNameReportRunning = true;
+      setDrawerOperationLock(true, shortNameReportTrigger);
+      setAdminScopeLocked(true);
+      shortNameProgress.removeAttribute('value');
+      shortNameProgress.removeAttribute('max');
+      showShortNameStatus('Checking course short names…');
+
+      try {
+        let loadedCourses = 0;
+        const courses = await accountCoursesForScope(scope, {
+          includes: ['total_students'],
+          onPage: page => {
+            loadedCourses += page.pageItems;
+            showShortNameStatus(`Checking course short names: ${loadedCourses} loaded.`);
+          }
+        });
+        const candidates = courses.filter(course => /^-\d+$/.test(String(course.course_code ?? '')));
+        shortNameProgress.max = Math.max(1, candidates.length);
+        shortNameProgress.value = 0;
+
+        let completed = 0;
+        let noSisSections = 0;
+        let errors = 0;
+        const results = new Array(candidates.length);
+        await Promise.all(candidates.map(async (course, index) => {
+          try {
+            const result = await shortNameCourseRow(course, scope);
+            results[index] = result.row;
+            if (result.noSisSections) noSisSections++;
+            if (result.hadError) errors++;
+          } catch (error) {
+            errors++;
+            results[index] = {
+              'scope.account_id': scope.accountId,
+              'scope.published': scope.publishedOnly,
+              'scope.enrollment_term_ids': scope.allTerms
+                ? 'all'
+                : scope.terms.map(term => term.id).join('|'),
+              'scope.enrollment_term_names': scope.termLabel,
+              'course.id': course.id ?? '',
+              'course.sis_course_id': course.sis_course_id ?? '',
+              'course.name': course.name ?? '',
+              'course.course_code': course.course_code ?? '',
+              'course.enrollment_term_id': course.enrollment_term_id ?? '',
+              'course.total_students': course.total_students ?? '',
+              'teacher.ids': '',
+              'teacher.sis_user_ids': '',
+              'teacher.names': '',
+              'teacher.roles': '',
+              'section.ids': '',
+              'section.sis_section_ids': '',
+              'section.names': '',
+              'run.generated_at': scope.generatedAt,
+              'run.status': 'error',
+              'run.error': error.message
+            };
+          } finally {
+            completed++;
+            shortNameProgress.value = completed;
+            showShortNameStatus(
+              `Loading matched courses: ${completed} of ${candidates.length}. ` +
+              `Without SIS sections: ${noSisSections}. Errors: ${errors}.`,
+              { isError: errors > 0 }
+            );
+          }
+        }));
+
+        const rows = results.filter(Boolean);
+        const columns = [
+          'scope.account_id',
+          'scope.published',
+          'scope.enrollment_term_ids',
+          'scope.enrollment_term_names',
+          'course.id',
+          'course.sis_course_id',
+          'course.name',
+          'course.course_code',
+          'course.enrollment_term_id',
+          'course.total_students',
+          'teacher.ids',
+          'teacher.sis_user_ids',
+          'teacher.names',
+          'teacher.roles',
+          'section.ids',
+          'section.sis_section_ids',
+          'section.names',
+          'run.generated_at',
+          'run.status',
+          'run.error'
+        ].map(key => ({ key, label: key }));
+        downloadCsv({
+          rows,
+          columns,
+          filename: `shortname.acct-${scope.accountId}.` +
+            `${scope.publishedOnly ? 'pub' : 'unpub'}.${timestampForFilename()}.csv`
+        });
+        if (!candidates.length) shortNameProgress.value = 1;
+        showShortNameStatus(
+          `Complete. ${courses.length} course(s) checked; ${candidates.length} matched the short-name ` +
+          `pattern; ${rows.length} row(s) written; ${noSisSections} had no SIS ` +
+          `sections; ${errors} error(s). CSV downloaded.`,
+          { isError: errors > 0 }
+        );
+      } catch (error) {
+        console.error('Numeric course short-name report failed.', error);
+        shortNameProgress.removeAttribute('value');
+        shortNameProgress.removeAttribute('max');
+        showShortNameStatus(`Report stopped: ${error.message}`, { isError: true });
+      } finally {
+        shortNameReportRunning = false;
+        setDrawerOperationLock(false);
+        setAdminScopeLocked(false);
+      }
+    }
+
+    shortNameReportTrigger.addEventListener('click', runShortNameReport);
 
     function sectionClassNumber(sisSectionId) {
       return String(sisSectionId ?? '').trim().match(/(\d{5})$/)?.[1] || '';
@@ -3553,16 +3832,8 @@
 
     async function observerCleanupPublishedCourseIds(scope) {
       if (!scope.publishedOnly) return null;
-      const termRequests = scope.allTerms ? [null] : scope.terms;
-      const courseLists = await Promise.all(termRequests.map(term => {
-        const params = new URLSearchParams({ per_page: '100' });
-        params.set('published', 'true');
-        if (term) params.set('enrollment_term_id', String(term.id));
-        return canvasApi.getAll(
-          `/api/v1/accounts/${encodeURIComponent(scope.accountId)}/courses?${params.toString()}`
-        );
-      }));
-      return new Set(courseLists.flat().map(course => String(course.id)));
+      const courses = await accountCoursesForScope(scope);
+      return new Set(courses.map(course => String(course.id)));
     }
 
     async function observerCleanupEnrollmentRows(scope) {
